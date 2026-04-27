@@ -28,3 +28,4 @@ test/api_logs/
 *.id2
 *.nam
 *.til
+ide/.pytest_tmp/
