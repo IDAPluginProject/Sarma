@@ -151,6 +151,7 @@ class MarkdownContent(QTextBrowser):
         self.setReadOnly(True)
         self.setObjectName("chatMarkdownContent")
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setViewportMargins(0, 0, 0, 0)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)

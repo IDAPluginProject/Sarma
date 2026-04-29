@@ -1578,6 +1578,7 @@ class Theme:
             color: {c.text_primary};
             border: none;
             font-size: {m.font_size_base};
+            padding: 0px;
         }}"""
 
     # -- Tool trace panel --
