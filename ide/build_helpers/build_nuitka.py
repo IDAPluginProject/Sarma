@@ -127,6 +127,13 @@ def build_command(
     for mod in _PYSIDE6_EXTRAS:
         command.append(f"--include-module={mod}")
 
+    # --- anti-bloat: exclude test/dev dependencies that leak via transitive imports
+    _NOFOLLOW_MODULES = [
+        "pytest",
+    ]
+    for mod in _NOFOLLOW_MODULES:
+        command.append(f"--nofollow-module={mod}")
+
     # --- auto-track all imports (langchain, langgraph, deepagents, etc.) ---
     command.append("--follow-imports")
 
