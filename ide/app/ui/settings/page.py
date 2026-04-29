@@ -43,6 +43,7 @@ from app.ui.settings.dialogs import McpServerDialog, McpServerDetailDialog, Mode
 from app.ui.settings.widgets import (
     NoWheelComboBox,
     NoWheelSpinBox,
+    format_token_text,
 )
 from app.ui.settings.workers import (
     _ConfigFormBinder,
@@ -725,7 +726,7 @@ class SettingsPage(QWidget):
         context_display = (
             self._t("settings.model.context.unlimited")
             if provider.max_context_tokens <= 0
-            else f"{provider.max_context_tokens:,}"
+            else format_token_text(provider.max_context_tokens)
         )
         mid_layout.addWidget(self._detail_label(
             self._t("settings.field.model_context"), context_display
