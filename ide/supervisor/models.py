@@ -72,6 +72,8 @@ class IdeConfig:
     plugin_dir: str = field(default_factory=_default_ida_plugin_dir)
     language: str = field(default_factory=_default_language)
     theme_mode: str = "light"  # "light" | "dark"
+    workspace_path: str = ""
+    skip_ida_mcp_check: bool = False
     notes: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

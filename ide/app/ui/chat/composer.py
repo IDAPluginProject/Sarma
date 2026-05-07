@@ -89,10 +89,33 @@ class Composer(QWidget):
 
         self._bottom_layout.addStretch(1)
 
-        self._send_button = QPushButton("\u2191")
+        self._send_button = QPushButton()
         self._send_button.setObjectName("chatSendRoundButton")
         self._send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_button.clicked.connect(self._on_send)
+
+        # Load send / stop icons tinted to the accent text colour
+        _send_svg = (
+            Path(__file__).resolve().parents[3]
+            / "resources" / "icons" / "send.svg"
+        )
+        _stop_svg = (
+            Path(__file__).resolve().parents[3]
+            / "resources" / "icons" / "stop.svg"
+        )
+        if _send_svg.exists() and _stop_svg.exists():
+            from app.ui.theme import current_palette
+            from app.ui.icons import tint_svg
+
+            _palette = current_palette()
+            self._icon_send = tint_svg(
+                str(_send_svg), _palette.accent_text, size=16
+            )
+            self._icon_stop = tint_svg(
+                str(_stop_svg), _palette.accent_text, size=16
+            )
+            self._send_button.setIcon(self._icon_send)
+
         self._bottom_layout.addWidget(self._send_button)
 
         container_layout.addWidget(bottom_bar, 1)
@@ -164,14 +187,16 @@ class Composer(QWidget):
         self._input.setEnabled(enabled)
 
     def set_running(self, running: bool) -> None:
-        """Toggle between send mode (↑) and stop mode (■)."""
+        """Toggle between send mode and stop mode."""
         self._is_running = running
         if running:
-            self._send_button.setText("\u25A0")  # ■ stop icon
+            if hasattr(self, "_icon_stop"):
+                self._send_button.setIcon(self._icon_stop)
             self._send_button.setObjectName("chatStopRoundButton")
             self._input.setEnabled(False)
         else:
-            self._send_button.setText("\u2191")  # ↑ send icon
+            if hasattr(self, "_icon_send"):
+                self._send_button.setIcon(self._icon_send)
             self._send_button.setObjectName("chatSendRoundButton")
             self._input.setEnabled(True)
         # Force QSS re-polish

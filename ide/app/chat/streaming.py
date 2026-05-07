@@ -134,10 +134,9 @@ def _normalize_update_events(
         if not messages:
             continue
 
-        if node_name == "agent":
-            # Agent node finished — look for tool call requests on the
-            # AIMessage.  In LangGraph the agent emits an AIMessage whose
-            # .tool_calls lists the tools it wants to invoke.
+        if node_name in ("agent", "model"):
+            # Agent / model node finished — look for tool call requests on the
+            # AIMessage.  Deepagents uses node name "model" instead of "agent".
             for msg in messages:
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for tc in msg.tool_calls:

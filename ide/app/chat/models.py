@@ -85,12 +85,10 @@ class ChatMessage:
         )
 
         if self.role == "tool":
-            if self.tool_call_id:
-                return ToolMessage(
-                    content=self.content,
-                    tool_call_id=self.tool_call_id,
-                    name=self.tool_name or "",
-                )
+            # Always degrade to text to avoid orphan ToolMessage issues.
+            # The preceding AIMessage in history may lack tool_calls
+            # (e.g. after compaction or summarization), which breaks
+            # providers that require tool_calls before every ToolMessage.
             return AIMessage(content=self._tool_history_fallback_text())
 
         extra: dict[str, Any] = {}

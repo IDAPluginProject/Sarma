@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -43,6 +44,8 @@ from app.ui.workspace.code_view import CodeViewWidget
 from app.ui.workspace.image_view import ImageViewWidget
 from app.ui.chat.page import ChatPage
 from app.chat.chat_service import ChatService
+from app.ui.dialogs.workspace_selector import WorkspaceSelectorDialog
+from app.ui.dialogs.first_run_install import FirstRunInstallDialog
 
 
 SIDEBAR_ITEMS = (
@@ -71,6 +74,9 @@ class MainWindow(QMainWindow):
         if _icon is not None:
             self.setWindowIcon(_icon)
 
+        # --- workspace selection ---
+        workspace_path = self._ensure_workspace()
+
         # --- child widgets ---
         self._page_stack = QStackedWidget()
         self._page_stack.setObjectName("pageStack")
@@ -84,7 +90,7 @@ class MainWindow(QMainWindow):
         self._status_detail_labels: dict[str, QLabel] = {}
         self._status_buttons: dict[str, QPushButton] = {}
 
-        self._chat_service = ChatService()
+        self._chat_service = ChatService(workspace_path=workspace_path)
         self._chat_page = ChatPage(self._i18n)
         self._chat_page.set_chat_service(self._chat_service)
 
@@ -100,6 +106,9 @@ class MainWindow(QMainWindow):
         self._image_view = ImageViewWidget()
         self._dir_tree.file_selected.connect(self._on_file_selected)
 
+        if workspace_path:
+            self._dir_tree.open_directory(workspace_path)
+
         self._settings_view = SettingsPage(SettingsService(self.supervisor_client))
 
         # --- gateway lifecycle (extracted) ---
@@ -111,6 +120,7 @@ class MainWindow(QMainWindow):
         )
 
         self._build_shell()
+        self._check_ida_mcp_install()
         self._gateway.refresh()
         self._chat_service.start()
 
@@ -123,6 +133,57 @@ class MainWindow(QMainWindow):
 
     def _load_language(self) -> str:
         return normalize_language(self.supervisor_client.get_ide_config().language)
+
+    def _ensure_workspace(self) -> str:
+        """Show the workspace selector on every launch (VS Code-style).
+
+        Recent workspaces are listed for quick re-open.  The user may also
+        browse for a new folder or skip entirely.
+        """
+        from pathlib import Path
+        from shared.database import DatabaseStore
+
+        config = self.supervisor_client.get_ide_config()
+        path = config.workspace_path
+
+        # Always prompt — pre-select the last workspace in the dialog if valid
+        db = DatabaseStore()
+        dialog = WorkspaceSelectorDialog(db, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return path or ""
+
+        chosen = dialog.selected_path()
+        if chosen == "":
+            # User explicitly skipped — clear any stale path
+            if path:
+                self.supervisor_client.update_ide_config(workspace_path="")
+            return ""
+        if not chosen:
+            return path or ""
+
+        # Persist to IdeConfig
+        self.supervisor_client.update_ide_config(workspace_path=chosen)
+        WorkspaceSelectorDialog.record_workspace(db, chosen)
+        return chosen
+
+    def _check_ida_mcp_install(self) -> None:
+        """Prompt to install IDA-MCP on first run if the plugin is missing."""
+        config = self.supervisor_client.get_ide_config()
+        if config.skip_ida_mcp_check:
+            return
+
+        check = self.supervisor_client.check_installation()
+        if check.ida_mcp_py_exists or check.ida_mcp_package_exists:
+            return
+
+        dialog = FirstRunInstallDialog(check.plugin_dir or "", parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            # User skipped — suppress future prompts
+            self.supervisor_client.update_ide_config(skip_ida_mcp_check=True)
+            return
+
+        # User wants to install — jump to Settings page
+        self._apply_mode("settings")
 
     # ------------------------------------------------------------------
     # Shell construction

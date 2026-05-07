@@ -47,12 +47,14 @@ class ChatServiceWorker(QObject):
     event_received = Signal(dict)  # StreamEvent.to_dict()
     conversation_updated = Signal(dict)  # Conversation.to_dict()
 
-    def __init__(self, db: DatabaseStore) -> None:
+    def __init__(
+        self, db: DatabaseStore, workspace_path: str = ""
+    ) -> None:
         super().__init__()
         self._db = db
         self._persistence = ChatPersistence(db)
         self._pool = McpClientPool()
-        self._factory = AgentFactory(self._pool)
+        self._factory = AgentFactory(self._pool, workspace_path=workspace_path)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
         self._active_turn: str | None = None
@@ -569,9 +571,15 @@ class ChatService(QObject):
     event_received = Signal(dict)
     conversation_updated = Signal(dict)
 
-    def __init__(self, db: DatabaseStore | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        db: DatabaseStore | None = None,
+        workspace_path: str = "",
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._db = db or DatabaseStore()
+        self._workspace_path = workspace_path
         self._thread: QThread | None = None
         self._worker: ChatServiceWorker | None = None
 
@@ -588,7 +596,9 @@ class ChatService(QObject):
             return
 
         self._thread = QThread(self)
-        self._worker = ChatServiceWorker(self._db)
+        self._worker = ChatServiceWorker(
+            self._db, workspace_path=self._workspace_path
+        )
         self._worker.moveToThread(self._thread)
 
         # Wire signals

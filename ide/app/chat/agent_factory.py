@@ -207,10 +207,13 @@ _MODEL_BUILDERS: dict[str, Any] = {
 
 
 class AgentFactory:
-    """Builds a LangGraph ReAct agent from runtime configuration."""
+    """Builds a deepagents agent from runtime configuration."""
 
-    def __init__(self, pool: McpClientPool) -> None:
+    def __init__(
+        self, pool: McpClientPool, workspace_path: str = ""
+    ) -> None:
         self._pool = pool
+        self._workspace_path = workspace_path
 
     async def build(
         self, config: AgentRunConfig
@@ -221,7 +224,7 @@ class AgentFactory:
             config: Full run configuration.
 
         Returns:
-            Tuple of (compiled LangGraph agent, list of LangChain tools).
+            Tuple of (compiled deepagents agent, list of LangChain tools).
 
         Raises:
             ProviderNotConfiguredError: If the provider is invalid.
@@ -260,18 +263,25 @@ class AgentFactory:
                 f"Failed to initialize model: {exc}"
             ) from exc
 
-        # 5. Build ReAct agent
+        # 5. Build deepagents agent with optional workspace backend
         try:
-            from langchain.agents import create_agent
+            from deepagents import create_deep_agent
 
-            agent = create_agent(
-                model,
-                tools,
-                system_prompt=config.system_prompt,
-            )
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "tools": tools,
+                "system_prompt": config.system_prompt,
+            }
+            if self._workspace_path:
+                from deepagents.backends import LocalShellBackend
+
+                kwargs["backend"] = LocalShellBackend(
+                    root_dir=self._workspace_path
+                )
+            agent = create_deep_agent(**kwargs)
         except Exception as exc:
             raise AgentBuildError(
-                f"Failed to create ReAct agent: {exc}"
+                f"Failed to create agent: {exc}"
             ) from exc
 
         logger.info(

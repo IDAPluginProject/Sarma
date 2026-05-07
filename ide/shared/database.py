@@ -23,7 +23,7 @@ from shared.paths import ensure_directory, get_ide_user_config_root
 
 DATABASE_FILENAME = "ide.db"
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 def _coerce(value: str, target_type: type) -> Any:
@@ -144,6 +144,13 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     error_text       TEXT,
     started_at       TEXT    NOT NULL DEFAULT '',
     finished_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workspace_history (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    path           TEXT    NOT NULL UNIQUE,
+    name           TEXT    NOT NULL DEFAULT '',
+    last_opened_at TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -381,6 +388,17 @@ class DatabaseStore:
             if "max_context_tokens" not in cols:
                 conn.execute("ALTER TABLE model_providers ADD COLUMN max_context_tokens INTEGER NOT NULL DEFAULT 0")
 
+        if old < 8:
+            # v7→v8: workspace history for recent project folders.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_history (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path           TEXT    NOT NULL UNIQUE,
+                    name           TEXT    NOT NULL DEFAULT '',
+                    last_opened_at TEXT    NOT NULL DEFAULT ''
+                )
+            """)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
         conn.execute("PRAGMA journal_mode=WAL")
@@ -408,6 +426,7 @@ class DatabaseStore:
         "conversation_messages",
         "conversation_mcp_servers",
         "tool_executions",
+        "workspace_history",
     })
 
     @classmethod
