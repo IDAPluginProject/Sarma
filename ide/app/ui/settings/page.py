@@ -1462,6 +1462,7 @@ class SettingsPage(QWidget):
 
     def _handle_install_result(self, result) -> None:
         self._install_display.apply_installation_check(result.check)
+        self._refresh_diaphora_status()
         message = build_reinstall_message(result, self._t, self._bool_text)
         QMessageBox.information(
             self,

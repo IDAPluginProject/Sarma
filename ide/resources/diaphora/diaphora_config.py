@@ -215,7 +215,7 @@ ML_DEBUG_SHOW_MATCHES = True
 # Some imports improve performance or add features to Diaphora but aren't 100%
 # required. Diaphora will warn the reverser when these libraries failed to be
 # imported. Change this directive to shutup this warning.
-SHOW_IMPORT_WARNINGS = True
+SHOW_IMPORT_WARNINGS = False
 
 #-------------------------------------------------------------------------------
 # Workarounds for IDA bugs

@@ -111,6 +111,7 @@ class SupervisorManager:
         from .install_runner import run_install
 
         config = self.get_ide_config()
+        plugin_dir = self._resolve_plugin_dir(config)
         ida_mcp_config = self.get_ida_mcp_config()
         python_path = self._effective_python_path()
         if not python_path:
@@ -119,7 +120,7 @@ class SupervisorManager:
                 ok=False,
                 summary="no Python executable configured",
                 check=self.installer.check_installation(
-                    plugin_dir=self._resolve_plugin_dir(config),
+                    plugin_dir=plugin_dir,
                     python_executable=None,
                     config_path=None,
                 ),
@@ -127,12 +128,45 @@ class SupervisorManager:
             )
 
         config_dict = ida_mcp_config.to_dict()
-        return run_install(
+        ida_mcp_result = run_install(
             python_executable=python_path,
             ida_path=ida_mcp_config.ida_path,
-            plugin_dir=self._resolve_plugin_dir(config),
+            plugin_dir=plugin_dir,
             ida_mcp_config_dict=config_dict,
             on_progress=on_progress,
+        )
+        if on_progress:
+            on_progress("[Diaphora] Installing Diaphora plugin...")
+        diaphora_result = self.diaphora_installer.install(plugin_dir=plugin_dir)
+        if on_progress:
+            on_progress(f"[Diaphora] {diaphora_result.summary}")
+
+        warnings = list(ida_mcp_result.warnings)
+        warnings.extend(
+            f"diaphora: {warning}" for warning in diaphora_result.warnings
+        )
+        if not diaphora_result.ok:
+            warnings.append(f"diaphora: {diaphora_result.summary}")
+
+        ok = ida_mcp_result.ok and diaphora_result.ok
+        if ida_mcp_result.ok and diaphora_result.ok:
+            summary = "Installation completed successfully"
+        elif ida_mcp_result.ok:
+            summary = f"ida_mcp installed; {diaphora_result.summary}"
+        elif diaphora_result.ok:
+            summary = f"{ida_mcp_result.summary}; diaphora installed successfully"
+        else:
+            summary = f"{ida_mcp_result.summary}; {diaphora_result.summary}"
+
+        return InstallationActionResult(
+            action=ida_mcp_result.action,
+            ok=ok,
+            summary=summary,
+            check=ida_mcp_result.check,
+            config_path=ida_mcp_result.config_path,
+            created=ida_mcp_result.created,
+            already_exists=ida_mcp_result.already_exists,
+            warnings=warnings,
         )
 
     # ------------------------------------------------------------------

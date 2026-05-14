@@ -10,10 +10,10 @@ def import_qtwidgets():
   Return the QtWidgets module used by the current IDA build.
   """
   try:
-    from PyQt5 import QtWidgets
+    from PySide6 import QtWidgets
     return QtWidgets
   except ImportError:
-    from PySide6 import QtWidgets
+    from PyQt5 import QtWidgets
     return QtWidgets
 
 

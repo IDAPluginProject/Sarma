@@ -3,7 +3,16 @@ from pathlib import Path
 
 import pytest
 
+from shared.ida_mcp_config import IdaMcpConfigStore
+from supervisor.config_store import IdeConfigStore
 from supervisor.installer import DiaphoraInstaller, EnvironmentInstaller
+from supervisor.manager import SupervisorManager
+from supervisor.models import (
+    DiaphoraInstallationCheck,
+    DiaphoraInstallationResult,
+    InstallationActionResult,
+    InstallationCheck,
+)
 from supervisor.platform_detector import (
     PlatformDetector,
     _probe_ida_python_via_idapyswitch,
@@ -193,6 +202,82 @@ def test_diaphora_check_rejects_cfg_pointing_elsewhere(tmp_path: Path) -> None:
     assert check.cfg_path_correct is False
     assert check.bundle_files_exist is True
     assert check.summary == "diaphora installation is incomplete"
+
+
+def test_manager_reinstall_installs_ida_mcp_and_diaphora(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    plugin_dir = tmp_path / "plugins"
+    config_store = IdeConfigStore(config_path=tmp_path / "ide.db")
+    config_store.update(plugin_dir=str(plugin_dir))
+    ida_mcp_config_store = IdaMcpConfigStore(
+        config_path=tmp_path / "config.conf",
+        db=config_store.database,
+    )
+    manager = SupervisorManager(
+        config_store=config_store,
+        ida_mcp_config_store=ida_mcp_config_store,
+    )
+    manager.update_ida_mcp_config(ida_python=sys.executable)
+
+    run_install_calls: list[dict[str, object]] = []
+
+    def _fake_run_install(**kwargs):
+        run_install_calls.append(kwargs)
+        return InstallationActionResult(
+            action="install",
+            ok=True,
+            summary="Installation completed successfully",
+            check=InstallationCheck(
+                plugin_dir=str(plugin_dir),
+                plugin_dir_exists=True,
+                config_path=str(plugin_dir / "ida_mcp" / "config.conf"),
+                config_exists=True,
+                python_executable=sys.executable,
+                python_exists=True,
+                ida_mcp_py_exists=True,
+                ida_mcp_package_exists=True,
+                summary="Installation completed successfully",
+            ),
+            config_path=str(plugin_dir / "ida_mcp" / "config.conf"),
+            created=True,
+        )
+
+    class _FakeDiaphoraInstaller:
+        plugin_dir: str | Path | None = None
+
+        def install(self, plugin_dir=None):
+            self.plugin_dir = plugin_dir
+            return DiaphoraInstallationResult(
+                action="install",
+                ok=True,
+                summary="diaphora installed successfully",
+                check=DiaphoraInstallationCheck(
+                    plugin_dir=str(plugin_dir),
+                    plugin_py_exists=True,
+                    plugin_cfg_exists=True,
+                    cfg_path_correct=True,
+                    bundle_files_exist=True,
+                    summary="diaphora is installed and configured",
+                ),
+                installed=True,
+            )
+
+    diaphora_installer = _FakeDiaphoraInstaller()
+    manager.diaphora_installer = diaphora_installer
+    monkeypatch.setattr("supervisor.install_runner.run_install", _fake_run_install)
+
+    progress: list[str] = []
+    result = manager.reinstall(on_progress=progress.append)
+
+    assert result.ok is True
+    assert result.summary == "Installation completed successfully"
+    assert run_install_calls
+    assert run_install_calls[0]["plugin_dir"] == str(plugin_dir)
+    assert diaphora_installer.plugin_dir == str(plugin_dir)
+    assert "[Diaphora] Installing Diaphora plugin..." in progress
+    assert "[Diaphora] diaphora installed successfully" in progress
 
 
 # ------------------------------------------------------------------
