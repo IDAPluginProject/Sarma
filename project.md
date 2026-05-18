@@ -22,6 +22,7 @@ IDA-MCP/
 │   │   │   ├── API.md            # MCP 工具、资源、HTTP/internal 契约参考
 │   │   │   └── requirements.txt  # IDA Python 运行依赖
 │   │   ├── diaphora/             # Bundled Diaphora 插件资源
+│   │   ├── diaphora-cpp/         # C++ Diaphora diff core rewrite
 │   │   ├── i18n/                 # IDE 文案资源
 │   │   └── icons/                # IDE 图标资源
 │   ├── tests/                    # IDE 自身 pytest 测试
@@ -61,6 +62,12 @@ IDA-MCP/
 
 - 作为 IDE 可安装/配置的 bundled resource 存在。
 - 不属于 `ida_mcp` 包，也不应被 `ida_mcp` 核心层反向依赖。
+
+### `ide/resources/diaphora-cpp/` — C++ Diaphora 重写
+
+- 作为 Diaphora diff 核心的 C++ 重写路径存在。
+- 当前边界是离线 CLI：读取 Diaphora SQLite export 数据库，写出兼容结果数据库。
+- 后续 IDA C++ 插件/exporter 集成应遵循 IDA 9 `plugin_t`/`plugmod_t` 与 `execute_sync()` 线程边界。
 
 ### `skills/` — Agent 技能资料
 

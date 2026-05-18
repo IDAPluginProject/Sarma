@@ -29,6 +29,7 @@ IDA-MCP is a desktop IDE plus bundled IDA plugin distribution. The IDE owns user
 | `ide/resources/ida_mcp/ida_mcp/` | Core plugin package: FastMCP instance server, gateway, proxy, tool/resource APIs, CLI/control, and IDA synchronization. | `ide/resources/ida_mcp/ida_mcp/project.md` |
 | `ide/resources/ida_mcp/test/` | Plugin integration tests that require a running gateway and registered IDA instance. | `AGENTS.md` |
 | `ide/resources/diaphora/` | Bundled Diaphora plugin resources managed by the IDE installer/config flows. | `project.md` |
+| `ide/resources/diaphora-cpp/` | Independent C++ rewrite path for Diaphora's diffing core; reads Diaphora SQLite exports and writes compatible result databases. | `ide/resources/diaphora-cpp/project.md` |
 | `skills/` | Agent skill instructions and references; not part of the IDE or plugin runtime import path. | `project.md` |
 
 ## Runtime Boundaries
