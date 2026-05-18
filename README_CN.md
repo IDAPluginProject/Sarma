@@ -2,6 +2,10 @@
 
 **[English](README.md)** | **中文**
 
+<p align="center">
+  <img src="Sarma.png" width="75%" alt="Sarma">
+</p>
+
 Sarma 是面向 IDA Pro 自动化的桌面 IDE。它提供 PySide6 工作台，用于安装和配置逆向工程资源、管理 IDA-MCP gateway，并承载面向分析工作的 assistant/chat/workspace 流程。
 
 本仓库是 IDE 父项目。运行时插件资源以 submodule 形式放在 `ide/resources/`：
