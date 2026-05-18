@@ -28,8 +28,7 @@ Sarma/
 │   └── tests/                   # IDE pytest 测试
 ├── skills/                      # 本地 Agent 工作流使用的技能材料
 ├── codemap.md                   # 架构 atlas 和入口索引
-├── project.md                   # 仓库项目地图
-└── roadmap.md                   # 仓库规划索引
+└── project.md                   # 仓库项目地图
 ```
 
 ## 获取源码
@@ -90,6 +89,5 @@ python ide/resources/ida_mcp/test/test.py
 
 - `codemap.md` - 仓库架构、入口和运行时边界。
 - `project.md` - Sarma 父仓库项目地图。
-- `roadmap.md` - IDE 与资源 submodule 的规划索引。
-- `ide/README.md` 和 `ide/project.md` - IDE 子项目说明。
+- Roadmap 与 IDE 规则已经合并到 `codemap.md` 和 `project.md`。
 - `ide/resources/ida_mcp/API.md` - IDA-MCP API 契约。

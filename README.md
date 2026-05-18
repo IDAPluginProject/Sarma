@@ -28,8 +28,7 @@ Sarma/
 │   └── tests/                   # IDE pytest suite
 ├── skills/                      # Agent skill materials used by local workflows
 ├── codemap.md                   # Architecture atlas and entry-point index
-├── project.md                   # Repository project map
-└── roadmap.md                   # Repository roadmap index
+└── project.md                   # Repository project map
 ```
 
 ## Getting the Source
@@ -90,6 +89,5 @@ python ide/resources/ida_mcp/test/test.py
 
 - `codemap.md` - repository architecture, entry points, and runtime boundaries.
 - `project.md` - Sarma parent-repository project map.
-- `roadmap.md` - roadmap index for the IDE and resource submodules.
-- `ide/README.md` and `ide/project.md` - IDE-specific notes.
+- Roadmap and IDE rules are merged into `codemap.md` and `project.md`.
 - `ide/resources/ida_mcp/API.md` - IDA-MCP API contract.

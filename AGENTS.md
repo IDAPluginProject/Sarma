@@ -1,9 +1,9 @@
-# IDA-MCP Agent Instructions
+# Sarma Agent Instructions
 
 ## Project Layout
 
 - `ide/` — PySide6 desktop IDE (Poetry project, Python 3.12). It **must not** import `ida_mcp` modules directly because they depend on the IDA Python runtime.
-- `ide/resources/ida_mcp/` — Bundled IDA plugin source and its pytest suite. The plugin source is copied to IDA’s `plugins/` directory during install.
+- `ide/resources/ida_mcp/` — IDA-MCP submodule source and its pytest suite. The plugin source is copied to IDA’s `plugins/` directory during install.
 - `ide/resources/ida_mcp/ida_mcp/` — The actual plugin package (FastMCP server, API modules, gateway).
 - `ide/resources/ida_mcp/test/` — pytest suite that exercises a live IDA instance through the gateway.
 
@@ -84,7 +84,8 @@ python ide/resources/ida_mcp/ida_mcp/command.py tool call get_metadata --port 10
 
 - `ide/resources/ida_mcp/API.md` — Full tool/request/response contract reference.
 - `README.md` / `README_CN.md` — User-facing documentation.
-- `ide/README.md` — IDE-specific architecture notes.
+- `project.md` — Sarma project map, IDE structure, boundaries, and development rules.
+- `codemap.md` — Repository architecture, entry points, rules, and roadmap.
 
 ## Repository Map
 

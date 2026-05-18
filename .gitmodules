@@ -6,4 +6,3 @@
 	path = ide/resources/ida_mcp
 	url = git@github.com:Captain-AI-Hub/IDA-MCP.git
 	branch = main
-	ignore = untracked

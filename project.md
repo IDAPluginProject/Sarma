@@ -25,11 +25,6 @@ Sarma/
 │   ├── shared/                   # 路径、数据库、DTO、配置读写等共享层
 │   ├── resources/
 │   │   ├── ida_mcp/              # Git submodule：IDA-MCP 插件项目（main）
-│   │   │   ├── ida_mcp.py        # IDA 插件入口文件，安装到 IDA plugins/
-│   │   │   ├── ida_mcp/          # 实际插件包（MCP server、gateway、API、proxy）
-│   │   │   ├── test/             # 需要 gateway + IDA 实例的插件集成测试
-│   │   │   ├── API.md            # MCP 工具、资源、HTTP/internal 契约参考
-│   │   │   └── requirements.txt  # IDA Python 运行依赖
 │   │   ├── diaphora/             # Git submodule：Diaphora 上游资源（master）
 │   │   ├── i18n/                 # IDE 文案资源
 │   │   ├── icons/                # IDE 图标资源
@@ -37,13 +32,48 @@ Sarma/
 │   ├── tests/                    # IDE 自身 pytest 测试
 │   └── build_helpers/            # Nuitka 打包辅助
 ├── skills/                       # 面向 Agent/MCP 工作流的技能资料
-├── codemap.md                    # 仓库级架构边界与入口索引
+├── codemap.md                    # 仓库级架构、规则和 roadmap 合并入口
 ├── project.md                    # 本文件，仓库级项目地图
-├── roadmap.md                    # 仓库级规划索引
 ├── README.md / README_CN.md      # 用户文档
 ├── AGENTS.md                     # Agent 开发约束
 ├── .gitmodules                   # 子模块远程与跟踪分支配置
 └── pytest.ini                    # 测试默认配置
+```
+
+## IDE 内部结构
+
+| 区域 | 职责 |
+|------|------|
+| `ide/app/ui/` | PySide6 widgets、布局、signal/slot、QFileDialog/QMessageBox 等 Qt 交互 |
+| `ide/app/presenters/` | snapshot/form state 到 UI 展示模型的转换，尽量保持纯 Python、dataclass、小函数、可单测 |
+| `ide/app/services/` | 应用服务：supervisor 封装、设置、文件预览、skill/MCP/chat 编排 |
+| `ide/app/chat/` | LangGraph/MCP chat runtime、streaming event 标准化、会话持久化 |
+| `ide/supervisor/` | 配置、安装、状态、gateway 控制、健康报告和环境探测 |
+| `ide/shared/` | 路径、运行时根目录、SQLite、DTO、配置读写和可携带数据目录 |
+| `ide/build_helpers/` | Nuitka 打包脚本和辅助逻辑 |
+
+主要调用链：
+
+```text
+MainWindow -> SupervisorClient -> SupervisorManager -> GatewayController
+                                                   -> EnvironmentInstaller
+                                                   -> IdeConfigStore
+                                                   -> IdaMcpConfigStore
+
+SettingsPage -> SettingsService -> SupervisorClient -> SupervisorManager
+             -> SettingsPresenter
+
+DirectoryTreeWidget -> file_preview_service.classify_file() -> Hex/Code/Image view
+```
+
+Chat 调用链：
+
+```text
+PySide6 UI -> ChatService(QThread + asyncio)
+           -> AgentFactory(create_react_agent)
+           -> McpClientPool(MultiServerMCPClient)
+           -> MCP servers, including IDA-MCP gateway/proxy
+           -> SQLite persistence
 ```
 
 ## 子项目边界
@@ -80,6 +110,19 @@ Sarma/
 - 存放面向 Agent 的本地技能和参考材料。
 - 不参与 IDE 或 IDA 插件运行时导入链。
 
+## 开发规则
+
+- `app/ui/` 只负责 widgets、布局、signal/slot 和 Qt 交互，不承载业务判断或配置模型映射。
+- 配置模型、表单转换、安装/检查结果文本拼装放在 `app/presenters/` 或 `app/services/`。
+- `SettingsPage` 只读取控件值、写回控件值、触发 dialog；form updates 映射放到 `settings_presenter.py`。
+- `MainWindow` 只负责页面切换、状态渲染、菜单与交互；status cards/tree rows 映射放到 `main_window_presenter.py`。
+- IDE 和 `ida_mcp` 是不同 Python 运行时，必须保持零代码级依赖。
+- IDE 与 `ida_mcp` 只能通过 gateway HTTP API、MCP 协议、subprocess 和文件系统安装/config 交互。
+- `ida_mcp/` 会被复制到 IDA `plugins/`，不得导入 IDE 或根仓库模块。
+- 所有持久化用户数据统一放在 IDE `data/` 目录，更新/重装不得删除。
+- 路径统一通过 `shared/paths.py` 与 `shared/runtime.py` 获取，支持开发态和 Nuitka 打包态。
+- `ida_mcp/` 不随 IDE 二进制一起编译，仅作为资源文件复制。
+
 ## 关键入口
 
 | 入口 | 职责 |
@@ -112,11 +155,9 @@ Sarma/
 
 | 文档 | 说明 |
 |------|------|
-| `codemap.md` | 仓库级架构 atlas 和目录责任摘要 |
+| `README.md` / `README_CN.md` | 用户入口和子模块说明 |
+| `codemap.md` | 仓库级架构 atlas、开发规则和 roadmap |
 | `project.md` | 仓库级项目地图 |
-| `roadmap.md` | 仓库级规划索引 |
-| `ide/project.md` | IDE 子项目结构与调用链 |
-| `ide/roadmap.md` | IDE/chat 产品与工程规划 |
 | `ide/resources/ida_mcp/project.md` | IDA-MCP 子模块项目地图 |
 | `ide/resources/ida_mcp/roadmap.md` | IDA-MCP 子模块规划 |
 | `ide/resources/ida_mcp/API.md` | MCP API/资源/内部 HTTP 契约 |
