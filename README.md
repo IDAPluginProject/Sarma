@@ -2,6 +2,10 @@
 
 **English** | **[中文](README_CN.md)**
 
+<p align="center">
+  <img src="Sarma.png" width="75%" alt="Sarma">
+</p>
+
 Sarma is a desktop IDE for IDA Pro automation. It provides a PySide6 workbench for installing and configuring reverse-engineering resources, managing the IDA-MCP gateway, and running assistant-driven analysis workflows without coupling the IDE runtime to IDA Python internals.
 
 The repository is the parent project for the IDE. Runtime plugins are tracked as submodules under `ide/resources/`:
