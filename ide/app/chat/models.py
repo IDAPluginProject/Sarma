@@ -237,6 +237,34 @@ class ResolvedSkill:
     temperature_override: float | None = None
 
 
+def resolve_skill(data: dict[str, Any] | None) -> ResolvedSkill | None:
+    """Parse a skill config dict into a ResolvedSkill."""
+    if not data:
+        return None
+    allowlist = denylist = None
+    allow_json = data.get("tool_allowlist_json")
+    if allow_json:
+        try:
+            allowlist = set(json.loads(allow_json))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    deny_json = data.get("tool_denylist_json")
+    if deny_json:
+        try:
+            denylist = set(json.loads(deny_json))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return ResolvedSkill(
+        id=data.get("id"),
+        name=data.get("name", ""),
+        system_prompt_suffix=data.get("system_prompt_template", ""),
+        tool_allowlist=allowlist,
+        tool_denylist=denylist,
+        preferred_model_name=data.get("model_override") or None,
+        temperature_override=data.get("temperature_override"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent run config (single turn)
 # ---------------------------------------------------------------------------

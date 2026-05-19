@@ -23,6 +23,7 @@ from app.chat.models import (
     Conversation,
     ResolvedSkill,
     StreamEvent,
+    resolve_skill,
 )
 from app.chat.message_persister import MessagePersister
 from app.chat.persistence import ChatPersistence
@@ -60,6 +61,8 @@ class ChatServiceWorker(QObject):
         self._running = False
         self._active_turn: str | None = None
         self._cancel_event: asyncio.Event | None = None
+        self._turn_lock: asyncio.Lock | None = None
+        self._stop_event: asyncio.Event | None = None
 
     # ------------------------------------------------------------------
     # QThread lifecycle
@@ -69,6 +72,8 @@ class ChatServiceWorker(QObject):
         """Called when the hosting QThread starts. Runs the asyncio loop."""
         self._running = True
         self._loop = asyncio.new_event_loop()
+        self._turn_lock = asyncio.Lock()
+        self._stop_event = asyncio.Event()
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._run_forever())
@@ -78,15 +83,14 @@ class ChatServiceWorker(QObject):
             self._running = False
 
     async def _run_forever(self) -> None:
-        """Keep the event loop alive to process submitted coroutines."""
-        while self._running:
-            await asyncio.sleep(0.1)
+        """Keep the event loop alive until stop_loop() signals shutdown."""
+        await self._stop_event.wait()
 
     def stop_loop(self) -> None:
         """Signal the loop to stop."""
         self._running = False
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._running.__class__.__bool__, False)
+        if self._stop_event and self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._stop_event.set)
 
     # ------------------------------------------------------------------
     # Public methods (called from UI thread via QMetaObject.invokeMethod
@@ -145,168 +149,164 @@ class ChatServiceWorker(QObject):
         message_history_dicts: list[dict[str, Any]],
     ) -> None:
         """Run one agent turn: build agent, stream response, persist."""
-        turn_id = _uid()
-        # Local cancel_event so concurrent turns don't interfere with each other.
-        cancel_event = asyncio.Event()
-        self._active_turn = turn_id
-        self._cancel_event = cancel_event
+        async with self._turn_lock:
+            turn_id = _uid()
+            cancel_event = asyncio.Event()
+            self._active_turn = turn_id
+            self._cancel_event = cancel_event
 
-        self._emit(make_run_started_event(conversation_id, turn_id))
+            self._emit(make_run_started_event(conversation_id, turn_id))
 
-        provider = self._parse_provider(provider_dict)
-        skill = self._parse_skill(skill_dict)
-        history = [ChatMessage.from_dict(d) for d in message_history_dicts]
-        history = HistoryCompactor(
-            self._persistence, provider.max_context_tokens
-        ).compact(conversation_id, history)
-        persister = MessagePersister(self._persistence)
+            provider = self._parse_provider(provider_dict)
+            skill = self._parse_skill(skill_dict)
+            history = [ChatMessage.from_dict(d) for d in message_history_dicts]
+            history = HistoryCompactor(
+                self._persistence, provider.max_context_tokens
+            ).compact(conversation_id, history)
+            persister = MessagePersister(self._persistence)
 
-        persister.save_user_message(conversation_id, turn_id, user_message)
+            persister.save_user_message(conversation_id, turn_id, user_message)
 
-        system_prompt = build_system_prompt(
-            skill=skill,
-            override=None,
-        )
+            system_prompt = build_system_prompt(
+                skill=skill,
+                override=None,
+            )
 
-        self._persistence.update_conversation_by_pk(
-            conversation_id, status="running"
-        )
+            self._persistence.update_conversation_by_pk(
+                conversation_id, status="running"
+            )
 
-        runner = AgentRunner(
-            factory=self._factory,
-            pool=self._pool,
-            provider_dict=provider_dict,
-            servers_list=mcp_server_dicts,
-            skill_dict=skill_dict,
-            history=history,
-            system_prompt=system_prompt,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-        )
+            runner = AgentRunner(
+                factory=self._factory,
+                pool=self._pool,
+                provider_dict=provider_dict,
+                servers_list=mcp_server_dicts,
+                skill_dict=skill_dict,
+                history=history,
+                system_prompt=system_prompt,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+            )
 
-        try:
-            async for stream_event in runner.run(user_message):
-                if cancel_event.is_set():
-                    self._emit(
-                        make_run_failed_event(
+            try:
+                async for stream_event in runner.run(user_message):
+                    if cancel_event.is_set():
+                        self._emit(
+                            make_run_failed_event(
+                                conversation_id,
+                                turn_id,
+                                "Cancelled by user",
+                                partial_content=runner.assistant_content,
+                            )
+                        )
+                        break
+
+                    if stream_event.type == "tool_start" and runner.assistant_content:
+                        persister.save_assistant_message(
                             conversation_id,
                             turn_id,
-                            "Cancelled by user",
-                            partial_content=runner.assistant_content,
+                            runner.assistant_content,
+                            runner.reasoning_content or None,
+                        )
+                        runner.assistant_content = ""
+                        runner.reasoning_content = ""
+
+                    if stream_event.type in (
+                        "tool_start", "tool_result", "tool_error"
+                    ):
+                        persister.save_tool_execution(stream_event)
+
+                    self._emit(stream_event)
+
+                else:
+                    self._emit(
+                        make_run_completed_event(
+                            conversation_id, turn_id, runner.assistant_content
                         )
                     )
-                    break
 
-                if stream_event.type == "tool_start" and runner.assistant_content:
                     persister.save_assistant_message(
                         conversation_id,
                         turn_id,
                         runner.assistant_content,
                         runner.reasoning_content or None,
                     )
-                    runner.assistant_content = ""
-                    runner.reasoning_content = ""
 
-                if stream_event.type in (
-                    "tool_start", "tool_result", "tool_error"
+                    updates: dict[str, Any] = {
+                        "status": "idle",
+                        "updated_at": ChatMessage().created_at,
+                    }
+                    inferred = self._infer_title(user_message)
+                    if inferred:
+                        updates["title"] = inferred
+                    self._persistence.update_conversation_by_pk(
+                        conversation_id,
+                        **updates,
+                    )
+
+            except McpConnectionError as exc:
+                logger.error("MCP connection failed: %s", exc)
+                error_detail = str(exc)
+                if (
+                    "ConnectError" in error_detail
+                    or "connection attempts failed" in error_detail
                 ):
-                    persister.save_tool_execution(stream_event)
-
-                self._emit(stream_event)
-
-            else:
+                    error_text = (
+                        f"MCP 连接失败：无法连接到 {exc.server_name}，请确认服务已启动。"
+                    )
+                else:
+                    error_text = error_detail.splitlines()[0]
                 self._emit(
-                    make_run_completed_event(
-                        conversation_id, turn_id, runner.assistant_content
+                    make_run_failed_event(
+                        conversation_id,
+                        turn_id,
+                        error_text,
+                        runner.assistant_content,
                     )
                 )
-
-                persister.save_assistant_message(
-                    conversation_id,
-                    turn_id,
-                    runner.assistant_content,
-                    runner.reasoning_content or None,
-                )
-
-                updates: dict[str, Any] = {
-                    "status": "idle",
-                    "updated_at": ChatMessage().created_at,
-                }
-                inferred = self._infer_title(
-                    user_message, runner.assistant_content
-                )
-                if inferred:
-                    updates["title"] = inferred
                 self._persistence.update_conversation_by_pk(
-                    conversation_id,
-                    **updates,
+                    conversation_id, status="failed"
                 )
 
-        except McpConnectionError as exc:
-            logger.error("MCP connection failed: %s", exc)
-            error_detail = str(exc)
-            if (
-                "ConnectError" in error_detail
-                or "connection attempts failed" in error_detail
-            ):
-                error_text = (
-                    f"MCP 连接失败：无法连接到 {exc.server_name}，请确认服务已启动。"
+            except AgentBuildError as exc:
+                logger.error("Agent build failed: %s", exc)
+                self._emit(
+                    make_run_failed_event(
+                        conversation_id,
+                        turn_id,
+                        str(exc),
+                        runner.assistant_content,
+                    )
                 )
-            else:
-                error_text = error_detail.splitlines()[0]
-            self._emit(
-                make_run_failed_event(
-                    conversation_id,
-                    turn_id,
-                    error_text,
-                    runner.assistant_content,
+                self._persistence.update_conversation_by_pk(
+                    conversation_id, status="failed"
                 )
-            )
-            self._persistence.update_conversation_by_pk(
-                conversation_id, status="failed"
-            )
 
-        except AgentBuildError as exc:
-            logger.error("Agent build failed: %s", exc)
-            self._emit(
-                make_run_failed_event(
-                    conversation_id,
-                    turn_id,
-                    str(exc),
-                    runner.assistant_content,
+            except Exception as exc:
+                logger.exception("Unexpected error during agent run")
+                error_text = str(exc)
+                if exc.__class__.__name__ == "GraphRecursionError":
+                    max_steps = 100_000
+                    if runner.run_config is not None:
+                        max_steps = runner.run_config.max_steps
+                    error_text = (
+                        f"Agent stopped after reaching the step limit "
+                        f"({max_steps}). Try asking a narrower question "
+                        "or increase the agent step limit."
+                    )
+                self._emit(
+                    make_run_failed_event(
+                        conversation_id,
+                        turn_id,
+                        error_text,
+                        runner.assistant_content,
+                    )
                 )
-            )
-            self._persistence.update_conversation_by_pk(
-                conversation_id, status="failed"
-            )
+                self._persistence.update_conversation_by_pk(
+                    conversation_id, status="failed"
+                )
 
-        except Exception as exc:
-            logger.exception("Unexpected error during agent run")
-            error_text = str(exc)
-            if exc.__class__.__name__ == "GraphRecursionError":
-                max_steps = 100_000
-                if runner.run_config is not None:
-                    max_steps = runner.run_config.max_steps
-                error_text = (
-                    f"Agent stopped after reaching the step limit "
-                    f"({max_steps}). Try asking a narrower question "
-                    "or increase the agent step limit."
-                )
-            self._emit(
-                make_run_failed_event(
-                    conversation_id,
-                    turn_id,
-                    error_text,
-                    runner.assistant_content,
-                )
-            )
-            self._persistence.update_conversation_by_pk(
-                conversation_id, status="failed"
-            )
-
-        finally:
-            # Only clear shared state if this turn is still the active one.
-            if self._active_turn == turn_id:
+            finally:
                 self._active_turn = None
                 self._cancel_event = None
 
@@ -328,37 +328,7 @@ class ChatServiceWorker(QObject):
     @staticmethod
     def _parse_skill(data: dict[str, Any] | None) -> ResolvedSkill | None:
         """Parse skill dict into a ResolvedSkill."""
-        if not data:
-            return None
-
-        import json
-
-        allowlist = None
-        denylist = None
-
-        allow_json = data.get("tool_allowlist_json")
-        if allow_json:
-            try:
-                allowlist = set(json.loads(allow_json))
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        deny_json = data.get("tool_denylist_json")
-        if deny_json:
-            try:
-                denylist = set(json.loads(deny_json))
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        return ResolvedSkill(
-            id=data.get("id"),
-            name=data.get("name", ""),
-            system_prompt_suffix=data.get("system_prompt_template", ""),
-            tool_allowlist=allowlist,
-            tool_denylist=denylist,
-            preferred_model_name=data.get("model_override") or None,
-            temperature_override=data.get("temperature_override"),
-        )
+        return resolve_skill(data)
 
     @staticmethod
     def _parse_servers(data_list: list[dict[str, Any]]) -> list[Any]:
@@ -368,9 +338,8 @@ class ChatServiceWorker(QObject):
         return [McpServerEntry.from_dict(d) for d in data_list]
 
     @staticmethod
-    def _infer_title(user_message: str, assistant_content: str) -> str:
+    def _infer_title(user_message: str) -> str:
         """Infer a conversation title from the first exchange."""
-        # Take first line of user message, truncated
         first_line = user_message.strip().split("\n")[0]
         if len(first_line) > 60:
             first_line = first_line[:57] + "..."
@@ -432,10 +401,15 @@ class ChatService(QObject):
 
     def stop(self) -> None:
         """Stop the worker thread cleanly."""
-        if self._worker and self._loop():
-            asyncio.run_coroutine_threadsafe(
-                self._worker.shutdown(), self._loop()
+        loop = self._loop()
+        if self._worker and loop:
+            future = asyncio.run_coroutine_threadsafe(
+                self._worker.shutdown(), loop
             )
+            try:
+                future.result(timeout=2.0)
+            except Exception:
+                pass
         if self._worker:
             self._worker.stop_loop()
         if self._thread:

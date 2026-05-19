@@ -257,6 +257,15 @@ class ModelProvider:
         allowed = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
+    def to_dto(self) -> "ModelProviderDTO":
+        from shared.dto import ModelProviderDTO
+        return ModelProviderDTO(
+            id=self.id, name=self.name, model_name=self.model_name,
+            api_mode=self.api_mode, api_key=self.api_key, base_url=self.base_url,
+            temperature=self.temperature, top_p=self.top_p,
+            max_context_tokens=self.max_context_tokens, enabled=self.enabled,
+        )
+
 
 @dataclass(slots=True)
 class McpServerEntry:
@@ -297,6 +306,16 @@ class McpServerEntry:
             return cls()
         allowed = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in data.items() if k in allowed})
+
+    def to_dto(self) -> "McpServerDTO":
+        from shared.dto import McpServerDTO
+        return McpServerDTO(
+            id=self.id, name=self.name, transport=self.transport,
+            enabled=self.enabled, command=self.command, args=self.args,
+            env=self.env, cwd=self.cwd, encoding=self.encoding,
+            url=self.url, headers=self.headers, timeout=self.timeout,
+            sse_read_timeout=self.sse_read_timeout,
+        )
 
     def to_langchain_config(self) -> dict[str, Any]:
         """Convert to MultiServerMCPClient-compatible dict.
@@ -378,3 +397,16 @@ class SkillEntry:
             return cls()
         allowed = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in data.items() if k in allowed})
+
+    def to_dto(self) -> "SkillDTO":
+        from shared.dto import SkillDTO
+        return SkillDTO(
+            id=self.id, name=self.name, description=self.description,
+            enabled=self.enabled, version=self.version, file_path=self.file_path,
+            install_dir=self.install_dir, installed_at=self.installed_at,
+            system_prompt_template=self.system_prompt_template,
+            tool_allowlist_json=self.tool_allowlist_json,
+            tool_denylist_json=self.tool_denylist_json,
+            model_override=self.model_override,
+            temperature_override=self.temperature_override,
+        )

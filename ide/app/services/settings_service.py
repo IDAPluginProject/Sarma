@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.i18n import normalize_language
 from app.services.supervisor_client import SupervisorClient
+from shared.dto import McpServerDTO, ModelProviderDTO, SkillDTO
 from supervisor.models import (
     DiaphoraInstallationCheck,
     DiaphoraInstallationResult,
@@ -14,9 +16,6 @@ from supervisor.models import (
     InstallationActionResult,
     InstallationCheck,
     IdeConfig,
-    McpServerEntry,
-    ModelProvider,
-    SkillEntry,
 )
 
 
@@ -64,7 +63,7 @@ class SettingsService:
 
     # --- Model providers ---
 
-    def get_model_providers(self) -> list[ModelProvider]:
+    def get_model_providers(self) -> list[ModelProviderDTO]:
         return self._supervisor_client.get_model_providers()
 
     def add_model_provider(self, **kwargs) -> int:
@@ -78,7 +77,7 @@ class SettingsService:
 
     # --- MCP servers ---
 
-    def get_mcp_servers(self) -> list[McpServerEntry]:
+    def get_mcp_servers(self) -> list[McpServerDTO]:
         return self._supervisor_client.get_mcp_servers()
 
     def add_mcp_server(self, **kwargs) -> int:
@@ -92,7 +91,7 @@ class SettingsService:
 
     # --- Skills ---
 
-    def get_skills(self) -> list[SkillEntry]:
+    def get_skills(self) -> list[SkillDTO]:
         return self._supervisor_client.get_skills()
 
     def add_skill(self, **kwargs) -> int:
