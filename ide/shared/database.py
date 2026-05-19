@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.paths import ensure_directory, get_ide_user_config_root
+from shared.migrations import apply_migrations
 
 DATABASE_FILENAME = "ide.db"
 
@@ -320,79 +321,7 @@ class DatabaseStore:
 
     def _migrate(self, conn: sqlite3.Connection, old: int, new: int) -> None:
         """Run incremental schema migrations."""
-        if old < 2:
-            # v1→v2: extend mcp_servers with transport/command/args/env/cwd/headers/timeout
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
-            for col, spec in (
-                ("transport", "TEXT NOT NULL DEFAULT 'stdio'"),
-                ("command",   "TEXT NOT NULL DEFAULT ''"),
-                ("args",      "TEXT NOT NULL DEFAULT ''"),
-                ("env",       "TEXT NOT NULL DEFAULT ''"),
-                ("cwd",       "TEXT NOT NULL DEFAULT ''"),
-                ("headers",   "TEXT NOT NULL DEFAULT ''"),
-                ("timeout",   "REAL NOT NULL DEFAULT 30.0"),
-            ):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE mcp_servers ADD COLUMN {col} {spec}")
-
-        if old < 3:
-            # v2→v3: add encoding and sse_read_timeout columns
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
-            for col, spec in (
-                ("encoding", "TEXT NOT NULL DEFAULT 'utf-8'"),
-                ("sse_read_timeout", "REAL NOT NULL DEFAULT 300.0"),
-            ):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE mcp_servers ADD COLUMN {col} {spec}")
-
-        if old < 4:
-            # v3→v4: extend skills with version/file_path/install_dir/installed_at
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(skills)").fetchall()}
-            for col, spec in (
-                ("version", "TEXT NOT NULL DEFAULT ''"),
-                ("file_path", "TEXT NOT NULL DEFAULT ''"),
-                ("install_dir", "TEXT NOT NULL DEFAULT ''"),
-                ("installed_at", "TEXT NOT NULL DEFAULT ''"),
-            ):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE skills ADD COLUMN {col} {spec}")
-
-        # v5 tables are created by _CREATE_TABLES_SQL (IF NOT EXISTS).
-        # v5 also extends skills with prompt/tool config columns.
-        if old < 5:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(skills)").fetchall()}
-            for col, spec in (
-                ("system_prompt_template", "TEXT NOT NULL DEFAULT ''"),
-                ("tool_allowlist_json", "TEXT"),
-                ("tool_denylist_json", "TEXT"),
-                ("model_override", "TEXT NOT NULL DEFAULT ''"),
-                ("temperature_override", "REAL"),
-            ):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE skills ADD COLUMN {col} {spec}")
-
-        if old < 6:
-            # v5→v6: add reasoning_content for thinking-mode LLMs (DeepSeek-R1 etc.)
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(conversation_messages)").fetchall()}
-            if "reasoning_content" not in cols:
-                conn.execute("ALTER TABLE conversation_messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''")
-
-        if old < 7:
-            # v6→v7: per-model context budget for history compaction.
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(model_providers)").fetchall()}
-            if "max_context_tokens" not in cols:
-                conn.execute("ALTER TABLE model_providers ADD COLUMN max_context_tokens INTEGER NOT NULL DEFAULT 0")
-
-        if old < 8:
-            # v7→v8: workspace history for recent project folders.
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS workspace_history (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    path           TEXT    NOT NULL UNIQUE,
-                    name           TEXT    NOT NULL DEFAULT '',
-                    last_opened_at TEXT    NOT NULL DEFAULT ''
-                )
-            """)
+        apply_migrations(conn, old, new)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))

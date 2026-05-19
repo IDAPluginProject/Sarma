@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from app.chat.chat_service import ChatService
 from app.chat.persistence import ChatPersistence
-from app.chat.skill_resolver import SkillResolver
+from app.presenters.chat_presenter import ChatPresenter, MessageViewModel
 from app.ui.chat.composer import Composer
 from app.ui.chat.message_list import MessageList
 from app.ui.chat.provider_selector import ProviderSelector
@@ -50,9 +50,9 @@ class ChatPage(QWidget):
 
         self._i18n = i18n
         self._supervisor_client: SupervisorClient | None = supervisor_client
+        self._presenter = ChatPresenter(supervisor_client)
         self._chat_service: ChatService | None = None
         self._persistence: ChatPersistence | None = None
-        self._skill_resolver: SkillResolver | None = None
         self._current_conversation_id: str | None = None
         self._current_provider_id: int | None = None
         self._current_skill_id: int | None = None
@@ -142,15 +142,8 @@ class ChatPage(QWidget):
         self._chat_service = service
         self._persistence = service.get_persistence()
         self._sidebar.set_persistence(self._persistence)
-
-        # Initialize skill resolver
-        self._skill_resolver = SkillResolver(self._persistence.db)
         self._refresh_skills()
-
-        # Connect streaming
         self._chat_service.event_received.connect(self._on_stream_event)
-
-        # Load existing conversations
         self._sidebar.refresh()
 
     def load_conversation(self, conversation_id: str) -> None:
@@ -161,54 +154,33 @@ class ChatPage(QWidget):
         self._message_list.clear_messages()
 
         messages = self._persistence.load_messages(conversation_id)
-        # Track whether this is the first assistant segment in the turn
-        # (shows role label) or a continuation (no role label).
-        first_assistant_in_turn = True
-        for msg in messages:
-            content = msg.content or ""
-            if msg.role == "user":
-                self._message_list.append_message("user", content)
-                first_assistant_in_turn = True
-            elif msg.role == "assistant":
-                show_role = first_assistant_in_turn
+        message_vms = self._presenter.parse_messages_for_display(
+            messages,
+            unknown_label=self._t("chat.tool.unknown"),
+            done_label=self._t("chat.tool.done"),
+            completed_label=self._t("chat.tool.completed"),
+        )
+        for vm in message_vms:
+            if vm.role == "user":
+                self._message_list.append_message("user", vm.content)
+            elif vm.role == "assistant":
                 self._message_list.append_message(
-                    "assistant", content, show_role=show_role
+                    "assistant", vm.content, show_role=vm.show_role
                 )
-                first_assistant_in_turn = False
-            elif msg.role == "tool":
-                tool_name = msg.tool_name or self._t("chat.tool.unknown")
-                args_text = ""
-                result_text = ""
-                # Content may be {"args": {...}, "result": "..."} JSON
-                try:
-                    import json
-                    data = json.loads(content)
-                    if isinstance(data, dict):
-                        args_data = data.get("args", {})
-                        if args_data:
-                            args_text = json.dumps(args_data, ensure_ascii=False)
-                        result_text = data.get("result", "") or ""
-                    elif isinstance(data, (list, str)):
-                        args_text = str(data)
-                except (json.JSONDecodeError, TypeError):
-                    args_text = content
-                summary = result_text[:100] if result_text else self._t("chat.tool.done")
+            elif vm.role == "tool":
                 self._message_list.add_tool_trace(
-                    tool_name,
+                    vm.tool_name,
                     self._t("chat.tool.completed"),
-                    summary=summary,
-                    args_text=args_text,
+                    summary=vm.summary,
+                    args_text=vm.args_text,
                 )
-                # Restore full result into the card for expand view
-                if result_text:
+                if vm.result_text:
                     self._message_list.update_last_tool_trace(
-                        tool_name,
+                        vm.tool_name,
                         self._t("chat.tool.completed"),
-                        summary=summary,
-                        result=result_text,
+                        summary=vm.summary,
+                        result=vm.result_text,
                     )
-                # Next assistant block is a continuation (no role label)
-                first_assistant_in_turn = False
 
         self._sidebar.set_active(conversation_id)
 
@@ -260,15 +232,7 @@ class ChatPage(QWidget):
 
     def _get_current_model_name(self) -> str:
         """Return the display name of the currently selected provider."""
-        try:
-            if self._supervisor_client is None:
-                return ""
-            for p in self._supervisor_client.get_model_providers():
-                if p.id == self._current_provider_id and p.enabled:
-                    return p.name or p.model_name or ""
-        except Exception:
-            pass
-        return ""
+        return self._presenter.get_provider_display_name(self._current_provider_id)
 
     # ------------------------------------------------------------------
     # Session sidebar handlers
@@ -325,13 +289,11 @@ class ChatPage(QWidget):
             logger.warning("ChatService not set, ignoring message")
             return
 
-        # Lock early to prevent double-submit race
         self._is_running = True
         self._composer.set_running(True)
 
-        provider_dict, servers_list, skill_dict = self._get_current_config()
+        provider_dict, servers_list, skill_dict, history_dicts = self._get_current_config()
         if not provider_dict:
-            logger.warning("No enabled model provider, ignoring message")
             self._is_running = False
             self._composer.set_running(False)
             self._message_list.append_message(
@@ -339,7 +301,6 @@ class ChatPage(QWidget):
             )
             return
 
-        # Create conversation if needed
         if self._current_conversation_id is None:
             conv = self._chat_service.create_conversation(
                 provider_id=self._current_provider_id,
@@ -351,17 +312,6 @@ class ChatPage(QWidget):
 
         self._message_list.append_message("user", text)
 
-        history_dicts: list[dict[str, Any]] = []
-        if self._persistence:
-            history = self._persistence.load_messages(
-                self._current_conversation_id, limit=50
-            )
-            history_dicts = [
-                m.to_dict()
-                for m in history
-                if m.role in ("user", "assistant", "tool")
-            ]
-
         self._chat_service.send_message(
             conversation_id=self._current_conversation_id,
             user_message=text,
@@ -371,53 +321,27 @@ class ChatPage(QWidget):
             message_history=history_dicts,
         )
 
-    def _get_current_config(
-        self,
-    ) -> tuple[dict, list[dict], dict | None]:
-        if self._supervisor_client is None:
-            return {}, [], None
-        try:
-            providers = self._supervisor_client.get_model_providers()
-            provider_dict: dict = {}
+    def _get_current_config(self) -> tuple[dict, list[dict], dict | None, list[dict]]:
+        history_dicts: list[dict[str, Any]] = []
+        if self._persistence and self._current_conversation_id:
+            history = self._persistence.load_messages(
+                self._current_conversation_id, limit=50
+            )
+            history_dicts = [
+                m.to_dict()
+                for m in history
+                if m.role in ("user", "assistant", "tool")
+            ]
 
-            # Use the user's explicit selection only — never auto-pick.
-            if self._current_provider_id is not None:
-                for p in providers:
-                    if p.id == self._current_provider_id and p.enabled:
-                        provider_dict = p.to_dict()
-                        break
-
-            servers = self._supervisor_client.get_mcp_servers()
-            servers_list = [s.to_dict() for s in servers if s.enabled]
-        except Exception:
-            logger.exception("Failed to access supervisor client")
-            return {}, [], None
-
-        # Resolve skill (auto: applies all enabled skills from DB)
-        skill_dict = None
-        # Skill selection is managed in Settings; the agent factory
-        # handles tool filtering based on skill config at build time.
-        # Here we only pass skill_dict if a specific skill is resolved.
-        if self._current_skill_id is not None and self._skill_resolver:
-            resolved = self._skill_resolver.resolve(self._current_skill_id)
-            if resolved:
-                skill_dict = {
-                    "id": resolved.id,
-                    "name": resolved.name,
-                    "system_prompt_template": resolved.system_prompt_suffix,
-                    "tool_allowlist_json": (
-                        json.dumps(sorted(resolved.tool_allowlist))
-                        if resolved.tool_allowlist is not None else None
-                    ),
-                    "tool_denylist_json": (
-                        json.dumps(sorted(resolved.tool_denylist))
-                        if resolved.tool_denylist is not None else None
-                    ),
-                    "model_override": resolved.preferred_model_name or "",
-                    "temperature_override": resolved.temperature_override,
-                }
-
-        return provider_dict, servers_list, skill_dict
+        config = self._presenter.prepare_submission_config(
+            conversation_id=self._current_conversation_id or "",
+            provider_id=self._current_provider_id,
+            skill_id=self._current_skill_id,
+            message_history=history_dicts,
+        )
+        if config is None:
+            return {}, [], None, []
+        return config.provider_dict, config.servers_list, config.skill_dict, config.history_dicts
 
     # ------------------------------------------------------------------
     # Provider selector
@@ -427,40 +351,25 @@ class ChatPage(QWidget):
         self._current_provider_id = provider_id
 
     def _refresh_models(self) -> None:
-        if self._supervisor_client is None:
+        provider_vms = self._presenter.get_enabled_providers()
+        if not provider_vms:
             self._provider_selector.update_providers([], None)
             return
-        try:
-            providers = [
-                p for p in self._supervisor_client.get_model_providers() if p.enabled
-            ]
 
-            model_data = [
-                (p.id, p.name or p.model_name or self._t("chat.unknown"), p.api_mode)
-                for p in providers
-            ]
-
-            # Only keep the current selection if it is still valid;
-            # do NOT auto-select the first provider — the user must
-            # explicitly pick one from the dropdown.
-            active_id = self._current_provider_id
-            valid_ids = {p.id for p in providers}
-            if active_id not in valid_ids:
-                active_id = None
-                self._current_provider_id = None
-
-            self._provider_selector.update_providers(model_data, active_id)
-        except Exception:
-            self._provider_selector.update_providers([], None)
+        model_data = [(p.id, p.display_name, p.api_mode) for p in provider_vms]
+        active_id = self._current_provider_id
+        valid_ids = {p.id for p in provider_vms}
+        if active_id not in valid_ids:
+            active_id = None
+            self._current_provider_id = None
+        self._provider_selector.update_providers(model_data, active_id)
 
     def _refresh_skills(self) -> None:
         """Resolve active skills from DB (settings-managed)."""
         try:
-            if self._skill_resolver:
-                # Auto-apply the first enabled skill if any
-                skills = self._skill_resolver.list_available()
-                if skills and self._current_skill_id is None:
-                    self._current_skill_id = skills[0]["id"]
+            skills = self._presenter.list_available_skills()
+            if skills and self._current_skill_id is None:
+                self._current_skill_id = skills[0]["id"]
         except Exception:
             pass
 

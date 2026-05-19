@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator
 
 from app.chat.agent_factory import AgentFactory
 from app.chat.mcp_pool import McpClientPool
-from app.chat.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent
+from app.chat.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent, resolve_skill
 from app.chat.streaming import normalize_langgraph_events
 
 
@@ -114,46 +114,14 @@ class AgentRunner:
 
     @staticmethod
     def _parse_provider(data: dict[str, Any]) -> Any:
-        from supervisor.models import ModelProvider
-
-        return ModelProvider.from_dict(data)
+        from shared.dto import ModelProviderDTO
+        return ModelProviderDTO(**{k: v for k, v in data.items() if k in ModelProviderDTO.__dataclass_fields__})
 
     @staticmethod
     def _parse_skill(data: dict[str, Any] | None) -> ResolvedSkill | None:
-        if not data:
-            return None
-
-        import json
-
-        allowlist = None
-        denylist = None
-
-        allow_json = data.get("tool_allowlist_json")
-        if allow_json:
-            try:
-                allowlist = set(json.loads(allow_json))
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        deny_json = data.get("tool_denylist_json")
-        if deny_json:
-            try:
-                denylist = set(json.loads(deny_json))
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        return ResolvedSkill(
-            id=data.get("id"),
-            name=data.get("name", ""),
-            system_prompt_suffix=data.get("system_prompt_template", ""),
-            tool_allowlist=allowlist,
-            tool_denylist=denylist,
-            preferred_model_name=data.get("model_override") or None,
-            temperature_override=data.get("temperature_override"),
-        )
+        return resolve_skill(data)
 
     @staticmethod
     def _parse_servers(data_list: list[dict[str, Any]]) -> list[Any]:
-        from supervisor.models import McpServerEntry
-
-        return [McpServerEntry.from_dict(d) for d in data_list]
+        from shared.dto import McpServerDTO
+        return [McpServerDTO(**{k: v for k, v in d.items() if k in McpServerDTO.__dataclass_fields__}) for d in data_list]

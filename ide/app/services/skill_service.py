@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import tempfile
 import zipfile
@@ -10,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from app.chat.models import ResolvedSkill
 from app.services.settings_service import SettingsService
+
+logger = logging.getLogger(__name__)
 
 
 class SkillService:
@@ -134,4 +138,49 @@ class SkillService:
             tool_denylist_json=deny_json_val,
             model_override=model_val,
             temperature_override=temp_val,
+        )
+
+    # --- Runtime resolution (formerly in skill_resolver.py) ---
+
+    def resolve(self, skill_id: int) -> ResolvedSkill | None:
+        """Load a single skill by id and return a ResolvedSkill."""
+        for dto in self._settings_service.get_skills():
+            if dto.id == skill_id and dto.enabled:
+                return self._to_resolved(dto)
+        return None
+
+    def list_available(self) -> list[dict]:
+        """Return all enabled skills as lightweight dicts for the selector UI."""
+        result: list[dict] = []
+        for dto in self._settings_service.get_skills():
+            if dto.enabled:
+                result.append({
+                    "id": dto.id,
+                    "name": dto.name,
+                    "description": dto.description,
+                })
+        return result
+
+    @staticmethod
+    def _to_resolved(dto: Any) -> ResolvedSkill:
+        allowlist: set[str] | None = None
+        denylist: set[str] | None = None
+        if dto.tool_allowlist_json:
+            try:
+                allowlist = set(json.loads(dto.tool_allowlist_json))
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Invalid tool_allowlist_json for skill %s", dto.name)
+        if dto.tool_denylist_json:
+            try:
+                denylist = set(json.loads(dto.tool_denylist_json))
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Invalid tool_denylist_json for skill %s", dto.name)
+        return ResolvedSkill(
+            id=dto.id,
+            name=dto.name,
+            system_prompt_suffix=dto.system_prompt_template,
+            tool_allowlist=allowlist,
+            tool_denylist=denylist,
+            preferred_model_name=dto.model_override or None,
+            temperature_override=dto.temperature_override,
         )

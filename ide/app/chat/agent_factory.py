@@ -96,14 +96,6 @@ class ReasoningChatOpenAIMixin:
         from langchain_core.messages import AIMessage, HumanMessage
 
         messages = self._convert_input(input_).to_messages()
-        if len(msg_dicts) != len(messages):
-            logger.warning(
-                "Cannot preserve reasoning_content: payload message count %d "
-                "does not match input message count %d",
-                len(msg_dicts),
-                len(messages),
-            )
-            return payload
 
         last_user_idx = -1
         for idx, msg in enumerate(messages):
@@ -111,6 +103,8 @@ class ReasoningChatOpenAIMixin:
                 last_user_idx = idx
 
         for idx, (orig, msg_dict) in enumerate(zip(messages, msg_dicts)):
+            if idx >= len(messages) or idx >= len(msg_dicts):
+                break
             if not isinstance(orig, AIMessage) or not isinstance(msg_dict, dict):
                 continue
             rc = orig.additional_kwargs.get("reasoning_content")

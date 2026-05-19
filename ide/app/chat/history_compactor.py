@@ -44,6 +44,9 @@ class HistoryCompactor:
         if not omitted:
             return kept
 
+        if not kept:
+            return []
+
         return [
             ChatMessage(
                 conversation_id=conversation_id,
