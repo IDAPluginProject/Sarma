@@ -40,6 +40,7 @@ import time
 from typing import Any
 
 from app.chat.models import StreamEvent
+from shared.enums import StreamEventType
 
 # Maximum characters retained from a tool result in streaming events.
 MAX_TOOL_RESULT_CHARS = 2000
@@ -146,7 +147,7 @@ class EventTranslator:
             return None
 
         return StreamEvent(
-            type="token",
+            type=StreamEventType.TOKEN,
             conversation_id=self._conv,
             turn_id=self._turn,
             payload={
@@ -203,7 +204,7 @@ class EventTranslator:
                 tool_call_id = tc.get("id", "")
 
                 events.append(StreamEvent(
-                    type="tool_start",
+                    type=StreamEventType.TOOL_START,
                     conversation_id=self._conv,
                     turn_id=self._turn,
                     payload={
@@ -219,7 +220,7 @@ class EventTranslator:
                 skill_name = _detect_skill_from_tool(tool_name, tool_args)
                 if skill_name:
                     events.append(StreamEvent(
-                        type="skill_triggered",
+                        type=StreamEventType.SKILL_TRIGGERED,
                         conversation_id=self._conv,
                         turn_id=self._turn,
                         payload={
@@ -240,7 +241,7 @@ class EventTranslator:
                         )
                     if subagent_type:
                         events.append(StreamEvent(
-                            type="subagent_start",
+                            type=StreamEventType.SUBAGENT_START,
                             conversation_id=self._conv,
                             turn_id=self._turn,
                             payload={
@@ -276,7 +277,7 @@ class EventTranslator:
             # update; for a task-tool completion, that's the orchestrator
             # — not the subagent that just finished.
             events.append(StreamEvent(
-                type="tool_error" if is_error else "tool_result",
+                type=StreamEventType.TOOL_ERROR if is_error else StreamEventType.TOOL_RESULT,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -295,7 +296,7 @@ class EventTranslator:
                 )
                 events.append(StreamEvent(
                     type=(
-                        "subagent_error" if is_error else "subagent_complete"
+                        StreamEventType.SUBAGENT_ERROR if is_error else StreamEventType.SUBAGENT_COMPLETE
                     ),
                     conversation_id=self._conv,
                     turn_id=self._turn,
@@ -335,7 +336,7 @@ class EventTranslator:
 
         if event_subtype in ("skill_matched", "skill_loaded") and skill_name:
             return [StreamEvent(
-                type="skill_triggered",
+                type=StreamEventType.SKILL_TRIGGERED,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -350,7 +351,7 @@ class EventTranslator:
         # Shape 2: {"skill": "...", "status": "loaded"|"matched"}
         if skill_name and data.get("status") in ("loaded", "matched"):
             return [StreamEvent(
-                type="skill_triggered",
+                type=StreamEventType.SKILL_TRIGGERED,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -365,7 +366,7 @@ class EventTranslator:
         # Shape 3: generic progress/status from get_stream_writer()
         if "progress" in data or "status" in data:
             return [StreamEvent(
-                type="custom_progress",
+                type=StreamEventType.CUSTOM_PROGRESS,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -452,7 +453,7 @@ def make_run_started_event(
     conversation_id: str, turn_id: str
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_started",
+        type=StreamEventType.RUN_STARTED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={},
@@ -466,7 +467,7 @@ def make_run_completed_event(
     assistant_content: str = "",
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_completed",
+        type=StreamEventType.RUN_COMPLETED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={"assistant_message": assistant_content},
@@ -481,7 +482,7 @@ def make_run_failed_event(
     partial_content: str = "",
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_failed",
+        type=StreamEventType.RUN_FAILED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={"error": error, "partial_message": partial_content},

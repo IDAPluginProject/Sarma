@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.chat.audit_subagents import AUDIT_SUBAGENT_ORDER
+from shared.enums import StreamEventType
 
 if TYPE_CHECKING:
     from app.i18n import I18n
@@ -662,25 +663,25 @@ class WorkflowDagView(QWidget):
         et = event.get("type", "")
         payload = event.get("payload", {}) or {}
 
-        if et == "run_started":
+        if et == StreamEventType.RUN_STARTED:
             self.begin_run()
-        elif et == "run_completed":
+        elif et == StreamEventType.RUN_COMPLETED:
             self.end_run(failed=False)
-        elif et == "run_failed":
+        elif et == StreamEventType.RUN_FAILED:
             self.end_run(failed=True)
-        elif et == "subagent_start":
+        elif et == StreamEventType.SUBAGENT_START:
             self._on_subagent_start(payload)
-        elif et == "subagent_complete":
+        elif et == StreamEventType.SUBAGENT_COMPLETE:
             self._on_subagent_finish(payload, failed=False)
-        elif et == "subagent_error":
+        elif et == StreamEventType.SUBAGENT_ERROR:
             self._on_subagent_finish(payload, failed=True)
-        elif et == "tool_start":
+        elif et == StreamEventType.TOOL_START:
             self._on_tool_start(payload)
-        elif et == "tool_result":
+        elif et == StreamEventType.TOOL_RESULT:
             self._on_tool_result(payload, failed=False)
-        elif et == "tool_error":
+        elif et == StreamEventType.TOOL_ERROR:
             self._on_tool_result(payload, failed=True)
-        elif et == "skill_triggered":
+        elif et == StreamEventType.SKILL_TRIGGERED:
             self._on_skill_triggered(payload)
 
     # ------------------------------------------------------------------

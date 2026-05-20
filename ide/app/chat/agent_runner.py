@@ -21,6 +21,7 @@ from app.chat.errors import AgentRunError
 from app.chat.mcp_pool import McpClientPool
 from app.chat.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent, resolve_skill
 from app.chat.streaming import EventTranslator
+from shared.enums import StreamEventType
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ class AgentRunner:
             self.reasoning_content += reasoning_content
 
     def _accumulate_event(self, stream_event: StreamEvent) -> None:
-        if stream_event.type == "token":
+        if stream_event.type == StreamEventType.TOKEN:
             chunk = stream_event.payload.get("content", "")
             if isinstance(chunk, list):
                 parts = []
@@ -129,7 +130,7 @@ class AgentRunner:
                 chunk = "".join(parts)
             if chunk:
                 self.assistant_content += chunk
-        elif stream_event.type == "tool_start":
+        elif stream_event.type == StreamEventType.TOOL_START:
             self.tool_calls.append(stream_event)
 
     @staticmethod

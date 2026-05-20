@@ -6,6 +6,7 @@ import json
 
 from app.chat.models import ChatMessage, StreamEvent
 from app.chat.persistence import ChatPersistence
+from shared.enums import StreamEventType
 
 
 class MessagePersister:
@@ -45,9 +46,9 @@ class MessagePersister:
         return msg
 
     def save_tool_execution(self, stream_event: StreamEvent) -> None:
-        if stream_event.type == "tool_start":
+        if stream_event.type == StreamEventType.TOOL_START:
             self._save_tool_start(stream_event)
-        elif stream_event.type in ("tool_result", "tool_error"):
+        elif stream_event.type in (StreamEventType.TOOL_RESULT, StreamEventType.TOOL_ERROR):
             self._save_tool_result(stream_event)
 
     def _save_tool_start(self, stream_event: StreamEvent) -> None:
