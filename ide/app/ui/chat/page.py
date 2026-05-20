@@ -45,6 +45,7 @@ from app.chat.persistence import ChatPersistence
 from app.presenters.chat_presenter import ChatPresenter, MessageViewModel
 from app.ui.chat.composer import Composer
 from app.ui.chat.message_list import MessageList
+from app.ui.chat.mode_tab_bar import ModeTabBar, MODE_CHAT, MODE_AUDIT
 from app.ui.chat.provider_selector import ProviderSelector
 from app.ui.chat.role_panel import RolePanel
 from app.services.supervisor_client import SupervisorClient
@@ -82,6 +83,7 @@ class ChatPage(QWidget):
         self._current_skill_id: int | None = None
         self._is_running: bool = False
         self._current_assistant_content: str = ""
+        self._current_mode: str = MODE_CHAT
 
         self._build_ui()
 
@@ -129,6 +131,11 @@ class ChatPage(QWidget):
         self._sidebar_toggle.setToolTip(self._t("chat.session.title"))
         self._sidebar_toggle.toggled.connect(self._on_sidebar_toggled)
         toggle_layout.addWidget(self._sidebar_toggle)
+
+        self._mode_tab_bar = ModeTabBar()
+        self._mode_tab_bar.mode_changed.connect(self._on_mode_changed)
+        toggle_layout.addWidget(self._mode_tab_bar)
+
         toggle_layout.addStretch(1)
         center_layout.addWidget(toggle_row)
 
@@ -203,6 +210,7 @@ class ChatPage(QWidget):
 
         self._refresh_models()
         self._refresh_skills()
+        self._on_mode_changed(self._current_mode)
 
     # ------------------------------------------------------------------
     # Sidebar toggle
@@ -215,6 +223,17 @@ class ChatPage(QWidget):
         else:
             self._sidebar.hide()
             self._h_splitter.setSizes([0, max(1, self.width())])
+
+    # ------------------------------------------------------------------
+    # Mode switching
+    # ------------------------------------------------------------------
+
+    def _on_mode_changed(self, mode: str) -> None:
+        self._current_mode = mode
+        is_audit = mode == MODE_AUDIT
+        self._workflow_view.setVisible(is_audit)
+        self._role_panel.setVisible(is_audit)
+        self._activity_wrapper.setVisible(is_audit)
 
     # ------------------------------------------------------------------
     # Public API
