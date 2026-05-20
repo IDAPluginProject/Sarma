@@ -1,4 +1,12 @@
-"""Agent construction and streaming execution for chat turns."""
+"""Agent construction and streaming execution for chat turns.
+
+Uses deepagents v0.6+ subgraph streaming (``subgraphs=True, version="v2"``)
+so that every token / tool call / result is attributable to either the
+orchestrator or a named subagent (recon, decompile, vuln_hunt, cross_ref,
+reporter).  The :class:`EventTranslator` resolves namespace tuples into
+human-readable subagent names and emits :class:`StreamEvent` instances with
+a ``subagent`` field on every payload.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +15,7 @@ from typing import Any, AsyncIterator
 from app.chat.agent_factory import AgentFactory
 from app.chat.mcp_pool import McpClientPool
 from app.chat.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent, resolve_skill
-from app.chat.streaming import normalize_langgraph_events
+from app.chat.streaming import EventTranslator
 
 
 class AgentRunner:
@@ -56,28 +64,35 @@ class AgentRunner:
         agent, _tools = await self._factory.build(self.run_config)
         input_messages = self._build_input_messages(self._history, message)
 
-        async for event_bundle in agent.astream(
+        translator = EventTranslator(self._conversation_id, self._turn_id)
+
+        async for chunk in agent.astream(
             {"messages": input_messages},
-            stream_mode=["messages", "updates"],
+            stream_mode=["messages", "updates", "custom"],
+            subgraphs=True,
+            version="v2",
             config={"recursion_limit": self.run_config.max_steps},
         ):
-            if not isinstance(event_bundle, tuple) or len(event_bundle) < 2:
-                continue
+            self._accumulate_reasoning(chunk)
 
-            mode, data = event_bundle[0], event_bundle[1]
-            self._accumulate_reasoning(mode, data)
-
-            stream_events = normalize_langgraph_events(
-                mode, data, self._conversation_id, self._turn_id
-            )
-            for stream_event in stream_events:
+            for stream_event in translator.translate(chunk):
                 self._accumulate_event(stream_event)
                 yield stream_event
 
-    def _accumulate_reasoning(self, mode: str, data: Any) -> None:
-        if mode != "messages":
+    def _accumulate_reasoning(self, chunk: Any) -> None:
+        """Extract reasoning_content from chunk in v2 subgraph format.
+
+        chunk is a dict: {"type": "messages"|"updates", "ns": (...), "data": ...}
+        For type="messages", data is (msg, metadata).
+        """
+        if not isinstance(chunk, dict):
             return
-        msg = data[0] if isinstance(data, tuple) and len(data) > 0 else None
+        if chunk.get("type") != "messages":
+            return
+        data = chunk.get("data")
+        if not isinstance(data, tuple) or len(data) < 2:
+            return
+        msg = data[0]
         if msg is None:
             return
         reasoning_content = getattr(msg, "reasoning_content", None)

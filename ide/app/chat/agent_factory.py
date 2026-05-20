@@ -257,14 +257,28 @@ class AgentFactory:
                 f"Failed to initialize model: {exc}"
             ) from exc
 
-        # 5. Build deepagents agent with optional workspace backend
+        # 5. Build deepagents agent with orchestrator prompt + subagents
         try:
             from deepagents import create_deep_agent
+            from app.chat.audit_subagents import (
+                build_runtime_subagents,
+                get_orchestrator_prompt,
+            )
+
+            # Use the vulnerability-discovery orchestrator prompt.
+            # If the user/skill provided a custom system_prompt, prepend it.
+            orch_prompt = get_orchestrator_prompt()
+            if config.system_prompt:
+                system_prompt = config.system_prompt + "\n\n" + orch_prompt
+            else:
+                system_prompt = orch_prompt
 
             kwargs: dict[str, Any] = {
                 "model": model,
                 "tools": tools,
-                "system_prompt": config.system_prompt,
+                "system_prompt": system_prompt,
+                # 8-stage vulnerability discovery pipeline.
+                "subagents": build_runtime_subagents(tools),
             }
             if self._workspace_path:
                 from deepagents.backends import LocalShellBackend

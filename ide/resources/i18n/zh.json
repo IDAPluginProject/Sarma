@@ -333,5 +333,15 @@
   "chat.skill.none": "无技能",
   "chat.skill.empty": "(无技能)",
   "chat.code.copy": "复制",
-  "chat.code.copied": "已复制！"
+  "chat.code.copied": "已复制！",
+  "chat.workflow.title": "工作流",
+  "chat.workflow.node.orchestrator": "编排器",
+  "chat.workflow.node.recon": "侦察",
+  "chat.workflow.node.hunt": "狩猎",
+  "chat.workflow.node.validate": "验证",
+  "chat.workflow.node.gapfill": "补漏",
+  "chat.workflow.node.dedupe": "去重",
+  "chat.workflow.node.trace": "追踪",
+  "chat.workflow.node.feedback": "反馈",
+  "chat.workflow.node.report": "报告"
 }

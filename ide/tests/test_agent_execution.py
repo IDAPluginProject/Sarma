@@ -11,11 +11,11 @@ import pytest
 
 
 class TestStreamingNormalization:
-    """Verify normalize_langgraph_events handles all event types correctly."""
+    """Verify EventTranslator handles all event types correctly."""
 
-    def test_normalize_message_token_event(self):
+    def test_translate_message_token_event(self):
         """AIMessageChunk with text content should produce a token event."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeChunk:
             content = "hello"
@@ -25,16 +25,21 @@ class TestStreamingNormalization:
         class FakeMetadata:
             pass
 
-        events = normalize_langgraph_events(
-            "messages", (FakeChunk(), FakeMetadata()), "conv1", "turn1"
-        )
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk(), FakeMetadata()),
+        }
+        events = translator.translate(chunk)
         assert len(events) == 1
         assert events[0].type == "token"
         assert events[0].payload["content"] == "hello"
+        assert events[0].payload["subagent"] == "orchestrator"
 
-    def test_normalize_message_suppresses_tool_call_chunks(self):
+    def test_translate_message_suppresses_tool_call_chunks(self):
         """Chunks with tool_call_chunks should be suppressed."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeChunk:
             content = ""
@@ -44,43 +49,59 @@ class TestStreamingNormalization:
         class FakeMetadata:
             pass
 
-        events = normalize_langgraph_events(
-            "messages", (FakeChunk(), FakeMetadata()), "conv1", "turn1"
-        )
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk(), FakeMetadata()),
+        }
+        events = translator.translate(chunk)
         assert len(events) == 0
 
-    def test_normalize_message_suppresses_toolmessage(self):
+    def test_translate_message_suppresses_toolmessage(self):
         """ToolMessage (has tool_call_id) should be suppressed."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeToolMsg:
             content = "tool result"
             tool_call_id = "tc_123"
+            tool_calls = None
+            tool_call_chunks = None
 
         class FakeMetadata:
             pass
 
-        events = normalize_langgraph_events(
-            "messages", (FakeToolMsg(), FakeMetadata()), "conv1", "turn1"
-        )
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeToolMsg(), FakeMetadata()),
+        }
+        events = translator.translate(chunk)
         assert len(events) == 0
 
-    def test_normalize_updates_agent_node(self):
+    def test_translate_updates_agent_node(self):
         """Agent node completion with tool_calls should produce tool_start events."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeAIMessage:
             tool_calls = [{"name": "search", "id": "tc_1", "args": {"q": "test"}}]
 
-        data = {"agent": {"messages": [FakeAIMessage()]}}
-        events = normalize_langgraph_events("updates", data, "conv1", "turn1")
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "updates",
+            "ns": (),
+            "data": {"model_request": {"messages": [FakeAIMessage()]}},
+        }
+        events = translator.translate(chunk)
         assert len(events) == 1
         assert events[0].type == "tool_start"
         assert events[0].payload["tool_name"] == "search"
+        assert events[0].payload["subagent"] == "orchestrator"
 
-    def test_normalize_updates_tools_node(self):
+    def test_translate_updates_tools_node(self):
         """Tools node completion should produce tool_result events."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeToolMsg:
             name = "search"
@@ -88,15 +109,20 @@ class TestStreamingNormalization:
             content = '{"results": [1,2,3]}'
             status = "success"
 
-        data = {"tools": {"messages": [FakeToolMsg()]}}
-        events = normalize_langgraph_events("updates", data, "conv1", "turn1")
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "updates",
+            "ns": (),
+            "data": {"tools": {"messages": [FakeToolMsg()]}},
+        }
+        events = translator.translate(chunk)
         assert len(events) == 1
         assert events[0].type == "tool_result"
         assert events[0].payload["tool_name"] == "search"
 
-    def test_normalize_updates_tools_error(self):
+    def test_translate_updates_tools_error(self):
         """Tools node with error status should produce tool_error events."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeToolMsg:
             name = "search"
@@ -104,14 +130,19 @@ class TestStreamingNormalization:
             content = "Connection refused"
             status = "error"
 
-        data = {"tools": {"messages": [FakeToolMsg()]}}
-        events = normalize_langgraph_events("updates", data, "conv1", "turn1")
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "updates",
+            "ns": (),
+            "data": {"tools": {"messages": [FakeToolMsg()]}},
+        }
+        events = translator.translate(chunk)
         assert len(events) == 1
         assert events[0].type == "tool_error"
 
-    def test_normalize_content_list_to_string(self):
+    def test_translate_content_list_to_string(self):
         """Content as list of blocks should be concatenated."""
-        from app.chat.streaming import normalize_langgraph_events
+        from app.chat.streaming import EventTranslator
 
         class FakeChunk:
             content = [{"type": "text", "text": "part1"}, "part2"]
@@ -121,11 +152,41 @@ class TestStreamingNormalization:
         class FakeMetadata:
             pass
 
-        events = normalize_langgraph_events(
-            "messages", (FakeChunk(), FakeMetadata()), "conv1", "turn1"
-        )
+        translator = EventTranslator("conv1", "turn1")
+        chunk = {
+            "type": "messages",
+            "ns": (),
+            "data": (FakeChunk(), FakeMetadata()),
+        }
+        events = translator.translate(chunk)
         assert len(events) == 1
         assert events[0].payload["content"] == "part1part2"
+
+    def test_subagent_token_routing(self):
+        """A token from a subagent namespace should carry the resolved name."""
+        from app.chat.streaming import EventTranslator
+
+        class FakeChunk:
+            content = "analysis result"
+            tool_calls = None
+            tool_call_chunks = None
+
+        class FakeMetadata:
+            pass
+
+        translator = EventTranslator("conv1", "turn1")
+        # Simulate a task call having been observed first.
+        translator._tool_call_to_subagent["tc_abc"] = "recon"
+
+        chunk = {
+            "type": "messages",
+            "ns": ("tools:tc_abc",),
+            "data": (FakeChunk(), FakeMetadata()),
+        }
+        events = translator.translate(chunk)
+        assert len(events) == 1
+        assert events[0].type == "token"
+        assert events[0].payload["subagent"] == "recon"
 
 
 # ---------------------------------------------------------------------------
