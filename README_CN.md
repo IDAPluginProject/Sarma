@@ -29,8 +29,9 @@ Sarma/
 │   │   ├── diaphora/            # Git submodule：Diaphora 上游仓库
 │   │   ├── i18n/                # IDE 多语言资源
 │   │   └── icons/               # IDE 图标
-│   └── tests/                   # IDE pytest 测试
-├── skills/                      # 本地 Agent 工作流使用的技能材料
+│   ├── tests/                   # IDE pytest 测试
+│   └── resources/
+│       └── skills/              # 本地 Agent 工作流使用的技能材料
 ├── codemap.md                   # 架构 atlas 和入口索引
 └── project.md                   # 仓库项目地图
 ```

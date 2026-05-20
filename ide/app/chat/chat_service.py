@@ -364,6 +364,7 @@ class ChatService(QObject):
         provider_id: int | None = None,
         model_name: str = "",
         skill_id: int | None = None,
+        mode: str = "audit",
     ) -> Conversation:
         """Create a new conversation and persist it."""
         persistence = self.get_persistence()
@@ -371,6 +372,7 @@ class ChatService(QObject):
             provider_id=provider_id,
             model_name_snapshot=model_name,
             skill_id=skill_id,
+            mode=mode,
         )
         persistence.create_conversation(conv)
         return conv

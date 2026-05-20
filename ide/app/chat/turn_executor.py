@@ -75,7 +75,10 @@ class TurnExecutor:
 
         conv = self._persistence.get_conversation(request.conversation_id)
         prompt_override = conv.system_prompt_override if conv else None
-        system_prompt = build_system_prompt(skill=skill, override=prompt_override)
+        conv_mode = conv.mode if conv else "audit"
+        system_prompt = build_system_prompt(
+            skill=skill, override=prompt_override, mode=conv_mode
+        )
 
         self._persistence.update_conversation_by_pk(
             request.conversation_id, status="running"
@@ -91,6 +94,7 @@ class TurnExecutor:
             system_prompt=system_prompt,
             conversation_id=request.conversation_id,
             turn_id=request.turn_id,
+            mode=conv_mode,
         )
 
         async for stream_event in runner.run(request.user_message):

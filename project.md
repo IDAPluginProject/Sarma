@@ -140,12 +140,12 @@ Sarma/
 │   │   └── logo.png
 │   │
 │   ├── tests/                        # IDE 测试套件
-│   └── data/                         # 用户数据 (持久化)
-│       └── skills/
-│
-├── skills/                           # Agent 技能资料
-│   ├── idapython/                    #   IDAPython API 文档 (50+ 模块)
-│   └── router-fs-vuln-audit/         #   路由器漏洞审计技能
+│   ├── data/                         # 用户数据 (持久化)
+│   │   └── skills/
+│   └── resources/
+│       └── skills/                   # Agent 技能资料
+│           ├── idapython/            #   IDAPython API 文档 (50+ 模块)
+│           └── router-fs-vuln-audit/ #   路由器漏洞审计技能
 │
 ├── codemap.md                        # 进度追踪
 ├── project.md                        # 本文件 (项目清单)

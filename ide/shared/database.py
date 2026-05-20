@@ -25,7 +25,7 @@ from shared.migrations import apply_migrations
 
 DATABASE_FILENAME = "ide.db"
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 _SIMPLE_TYPES = {"str": str, "int": int, "float": float, "bool": bool}
 
@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     model_name_snapshot TEXT NOT NULL DEFAULT '',
     skill_id    INTEGER,
     system_prompt_override TEXT,
+    mode        TEXT    NOT NULL DEFAULT 'audit',
     status      TEXT    NOT NULL DEFAULT 'idle',
     created_at  TEXT    NOT NULL DEFAULT '',
     updated_at  TEXT    NOT NULL DEFAULT ''

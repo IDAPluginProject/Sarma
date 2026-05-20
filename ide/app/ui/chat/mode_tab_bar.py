@@ -16,7 +16,7 @@ class ModeTabBar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._current_mode = MODE_CHAT
+        self._current_mode = MODE_AUDIT
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
