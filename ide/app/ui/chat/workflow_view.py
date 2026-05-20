@@ -1,9 +1,10 @@
-"""Workflow DAG visualization for the code-audit subagent pipeline.
+"""Workflow DAG visualization for the vulnerability discovery harness.
 
-Shows a directed graph with the **Orchestrator** at the top and five
-specialist subagents below: ``recon``, ``decompile``, ``vuln_hunt``,
-``cross_ref``, ``reporter``. Each node renders status (idle / running /
-done / failed) with colour + a soft pulsing animation while running.
+Shows a directed graph with the **Orchestrator** at the top and eight
+specialist subagents: ``recon``, ``hunt``, ``validate``, ``gapfill``,
+``dedupe``, ``trace``, ``feedback``, ``report``.  Each node renders
+status (idle / running / done / failed) with colour + a soft pulsing
+animation while running.
 
 The view is driven by ``StreamEvent`` payloads forwarded from the chat
 page:
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
+    Property,
     QEasingCurve,
     QPointF,
     QPropertyAnimation,
@@ -239,7 +241,7 @@ class _AgentNode(QGraphicsObject):
         self._pulse = value
         self.update()
 
-    pulse = property(get_pulse, set_pulse)
+    pulse = Property(float, get_pulse, set_pulse)
 
     # ---- Public API ----
 
@@ -502,6 +504,7 @@ class WorkflowDagView(QWidget):
 
         self._nodes: dict[str, _AgentNode] = {}
         self._build_graph()
+        self._view.setMinimumHeight(280)
         outer.addWidget(self._view, 1)
 
         # Activity is rendered inline in the chat message list (tool traces)
@@ -582,6 +585,19 @@ class WorkflowDagView(QWidget):
             -margin, -margin, margin, margin
         )
         self._scene.setSceneRect(rect)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._fit_scene()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_scene()
+
+    def _fit_scene(self) -> None:
+        rect = self._scene.sceneRect()
+        if not rect.isNull() and self._view.width() > 1:
+            self._view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _localized_labels(self) -> dict[str, str]:
         if self._i18n is None:

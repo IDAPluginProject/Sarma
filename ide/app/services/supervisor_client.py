@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from shared.dto import McpServerDTO, ModelProviderDTO, SkillDTO
+from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, SkillDTO
 from shared.models import ConfigStoreInfo, IdaMcpConfig
 from supervisor.api import ISupervisorAPI, create_api
 from supervisor.models import (
@@ -67,6 +67,9 @@ class SupervisorClient:
 
     def reinstall(self, *, on_progress=None) -> InstallationActionResult:
         return self._api.reinstall(on_progress=on_progress)
+
+    def install_requirements(self) -> InstallationActionResult:
+        return self._api.install_requirements()
 
     def detect_ida_executable(self, ida_dir: str) -> str | None:
         return self._api.detect_ida_executable(ida_dir)
@@ -172,3 +175,13 @@ class SupervisorClient:
 
     def get_skills_dir(self) -> Path:
         return self._api.get_skills_dir()
+
+    # --- Agent model assignments ---
+
+    def get_agent_model_assignments(self) -> list[AgentModelAssignmentDTO]:
+        return self._api.get_agent_model_assignments()
+
+    def update_agent_model_assignment(
+        self, agent_name: str, provider_id: int | None
+    ) -> bool:
+        return self._api.update_agent_model_assignment(agent_name, provider_id)

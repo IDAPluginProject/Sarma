@@ -178,12 +178,18 @@ AUDIT_SUBAGENT_ORDER: tuple[str, ...] = tuple(s["name"] for s in AUDIT_SUBAGENTS
 
 def build_subagent_specs(
     mcp_tools: list[Any] | None = None,
+    subagent_models: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build deepagents-compatible SubAgent dicts from the spec above.
 
     Each subagent receives all IDA MCP tools (decompilation is just a
     tool, not a dedicated agent).  The ``_tool_prefixes`` field is used
     for optional tool filtering when the caller wants to restrict scope.
+
+    Args:
+        mcp_tools: Available MCP tools to assign to subagents.
+        subagent_models: Optional dict mapping agent name → initialized
+            BaseChatModel instance for per-subagent model override.
     """
     specs: list[dict[str, Any]] = []
     for agent_spec in AUDIT_SUBAGENTS:
@@ -192,6 +198,8 @@ def build_subagent_specs(
             "description": agent_spec["description"],
             "system_prompt": agent_spec["system_prompt"],
         }
+        if subagent_models and agent_spec["name"] in subagent_models:
+            spec["model"] = subagent_models[agent_spec["name"]]
         if mcp_tools:
             prefixes = agent_spec.get("_tool_prefixes", [])
             if prefixes:

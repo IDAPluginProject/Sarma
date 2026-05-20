@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
-from shared.dto import McpServerDTO, ModelProviderDTO, SkillDTO
+from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, SkillDTO
 from shared.models import ConfigStoreInfo, IdaMcpConfig
 from supervisor.models import (
     DiaphoraInstallationCheck,
@@ -44,6 +44,7 @@ class ISupervisorAPI(Protocol):
     def check_installation(self) -> InstallationCheck: ...
     def repair_installation(self) -> InstallationActionResult: ...
     def reinstall(self, *, on_progress: Callable[[str], None] | None = None) -> InstallationActionResult: ...
+    def install_requirements(self) -> InstallationActionResult: ...
     def detect_ida_executable(self, ida_dir: str) -> str | None: ...
     def detect_ida_python(self, ida_dir: str) -> str | None: ...
 
@@ -70,6 +71,9 @@ class ISupervisorAPI(Protocol):
     def update_skill(self, skill_id: int, **updates: object) -> bool: ...
     def remove_skill(self, skill_id: int) -> bool: ...
     def get_skills_dir(self) -> Path: ...
+
+    def get_agent_model_assignments(self) -> list[AgentModelAssignmentDTO]: ...
+    def update_agent_model_assignment(self, agent_name: str, provider_id: int | None) -> bool: ...
 
 
 class SupervisorAPIImpl:
@@ -125,6 +129,9 @@ class SupervisorAPIImpl:
 
     def reinstall(self, *, on_progress=None) -> InstallationActionResult:
         return self._manager.reinstall(on_progress=on_progress)
+
+    def install_requirements(self) -> InstallationActionResult:
+        return self._manager.install_requirements()
 
     def detect_ida_executable(self, ida_dir: str) -> str | None:
         return self._manager.installer.detect_ida_executable(ida_dir)
@@ -193,6 +200,23 @@ class SupervisorAPIImpl:
 
     def get_skills_dir(self) -> Path:
         return self._manager.get_skills_dir()
+
+    def get_agent_model_assignments(self) -> list[AgentModelAssignmentDTO]:
+        rows = self._manager.get_agent_model_assignments()
+        return [
+            AgentModelAssignmentDTO(
+                id=r.get("id"),
+                agent_name=r.get("agent_name", ""),
+                provider_id=r.get("provider_id"),
+                provider_name=r.get("provider_name", ""),
+                created_at=r.get("created_at", ""),
+                updated_at=r.get("updated_at", ""),
+            )
+            for r in rows
+        ]
+
+    def update_agent_model_assignment(self, agent_name: str, provider_id: int | None) -> bool:
+        return self._manager.update_agent_model_assignment(agent_name, provider_id)
 
 
 def create_api() -> ISupervisorAPI:

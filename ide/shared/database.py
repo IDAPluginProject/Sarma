@@ -25,7 +25,7 @@ from shared.migrations import apply_migrations
 
 DATABASE_FILENAME = "ide.db"
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 10
 
 _SIMPLE_TYPES = {"str": str, "int": int, "float": float, "bool": bool}
 
@@ -155,6 +155,14 @@ CREATE TABLE IF NOT EXISTS workspace_history (
     path           TEXT    NOT NULL UNIQUE,
     name           TEXT    NOT NULL DEFAULT '',
     last_opened_at TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS audit_agent_models (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_name  TEXT    NOT NULL UNIQUE,
+    provider_id INTEGER,
+    created_at  TEXT    NOT NULL DEFAULT '',
+    updated_at  TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -353,6 +361,7 @@ class DatabaseStore:
         "conversation_mcp_servers",
         "tool_executions",
         "workspace_history",
+        "audit_agent_models",
     })
 
     _VALID_COLUMN_NAME = re.compile(r"^[a-z][a-z0-9_]*$")

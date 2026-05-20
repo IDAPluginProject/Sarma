@@ -111,6 +111,10 @@ class MainWindow(QMainWindow):
         if workspace_path:
             self._dir_tree.open_directory(workspace_path)
 
+        # Seed native skills before settings UI reads from DB
+        from app.services.skill_service import SkillService
+        SkillService(SettingsService(self.supervisor_client)).seed_native_skills()
+
         self._settings_view = SettingsPage(SettingsService(self.supervisor_client))
 
         # --- gateway lifecycle (extracted) ---

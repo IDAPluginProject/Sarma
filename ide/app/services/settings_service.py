@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.i18n import normalize_language
 from app.services.supervisor_client import SupervisorClient
-from shared.dto import McpServerDTO, ModelProviderDTO, SkillDTO
+from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, SkillDTO
 from supervisor.models import (
     DiaphoraInstallationCheck,
     DiaphoraInstallationResult,
@@ -61,6 +61,9 @@ class SettingsService:
     def reinstall(self, *, on_progress=None) -> InstallationActionResult:
         return self._supervisor_client.reinstall(on_progress=on_progress)
 
+    def install_requirements(self) -> InstallationActionResult:
+        return self._supervisor_client.install_requirements()
+
     # --- Model providers ---
 
     def get_model_providers(self) -> list[ModelProviderDTO]:
@@ -111,6 +114,18 @@ class SettingsService:
 
     def detect_ida_python(self, ida_dir: str) -> str | None:
         return self._supervisor_client.detect_ida_python(ida_dir)
+
+    # --- Agent model assignments ---
+
+    def get_agent_model_assignments(self) -> list[AgentModelAssignmentDTO]:
+        return self._supervisor_client.get_agent_model_assignments()
+
+    def update_agent_model_assignment(
+        self, agent_name: str, provider_id: int | None
+    ) -> bool:
+        return self._supervisor_client.update_agent_model_assignment(
+            agent_name, provider_id
+        )
 
     # --- Diaphora ---
 

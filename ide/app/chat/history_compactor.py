@@ -38,8 +38,17 @@ class HistoryCompactor:
         kept.reverse()
         omitted.reverse()
 
+        # Tool messages at the start of `kept` are orphans (no preceding
+        # assistant message to bind them).  Move them back into omitted
+        # at the correct chronological position (they were the newest of
+        # the omitted batch, so insert at the end).
+        orphan_tools: list[ChatMessage] = []
         while kept and kept[0].role == "tool":
-            omitted.append(kept.pop(0))
+            orphan_tools.append(kept.pop(0))
+        if orphan_tools:
+            # Insert before the first kept message's time position — i.e.
+            # at the end of omitted (which is sorted oldest→newest).
+            omitted.extend(orphan_tools)
 
         if not omitted:
             return kept

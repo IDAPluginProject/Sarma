@@ -1,21 +1,28 @@
 """Agent construction and streaming execution for chat turns.
 
-Uses deepagents v0.6+ subgraph streaming (``subgraphs=True, version="v2"``)
-so that every token / tool call / result is attributable to either the
-orchestrator or a named subagent (recon, decompile, vuln_hunt, cross_ref,
-reporter).  The :class:`EventTranslator` resolves namespace tuples into
-human-readable subagent names and emits :class:`StreamEvent` instances with
-a ``subagent`` field on every payload.
+For audit-mode runs, uses deepagents v0.6+ subgraph streaming
+(``subgraphs=True, version="v2"``) so that every token / tool call /
+result is attributable to either the orchestrator or a named subagent.
+The :class:`EventTranslator` resolves namespace tuples into subagent
+names and emits :class:`StreamEvent` instances with a ``subagent``
+field on every payload.
+
+For regular chat, uses LangGraph's ``create_react_agent`` with standard
+streaming.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, AsyncIterator
 
 from app.chat.agent_factory import AgentFactory
+from app.chat.errors import AgentRunError
 from app.chat.mcp_pool import McpClientPool
 from app.chat.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent, resolve_skill
 from app.chat.streaming import EventTranslator
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRunner:
@@ -66,18 +73,26 @@ class AgentRunner:
 
         translator = EventTranslator(self._conversation_id, self._turn_id)
 
-        async for chunk in agent.astream(
-            {"messages": input_messages},
-            stream_mode=["messages", "updates", "custom"],
-            subgraphs=True,
-            version="v2",
-            config={"recursion_limit": self.run_config.max_steps},
-        ):
-            self._accumulate_reasoning(chunk)
+        try:
+            async for chunk in agent.astream(
+                {"messages": input_messages},
+                stream_mode=["messages", "updates", "custom"],
+                subgraphs=True,
+                version="v2",
+                config={"recursion_limit": self.run_config.max_steps},
+            ):
+                self._accumulate_reasoning(chunk)
 
-            for stream_event in translator.translate(chunk):
-                self._accumulate_event(stream_event)
-                yield stream_event
+                for stream_event in translator.translate(chunk):
+                    self._accumulate_event(stream_event)
+                    yield stream_event
+        except AgentRunError:
+            raise
+        except Exception as exc:
+            logger.error("Agent execution failed: %s", exc, exc_info=True)
+            raise AgentRunError(
+                str(exc), recoverable=not isinstance(exc, (KeyboardInterrupt, SystemExit))
+            ) from exc
 
     def _accumulate_reasoning(self, chunk: Any) -> None:
         """Extract reasoning_content from chunk in v2 subgraph format.

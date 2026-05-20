@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, Signal, QThread
 
 from app.chat.agent_runner import AgentRunner
 from app.chat.agent_factory import AgentFactory
-from app.chat.errors import AgentBuildError, McpConnectionError
+from app.chat.errors import AgentBuildError, AgentRunError, McpConnectionError
 from app.chat.history_compactor import HistoryCompactor
 from app.chat.mcp_pool import McpClientPool
 from app.chat.models import (
@@ -191,13 +191,11 @@ class ChatServiceWorker(QObject):
             try:
                 async for stream_event in runner.run(user_message):
                     if cancel_event.is_set():
-                        self._emit(
-                            make_run_failed_event(
-                                conversation_id,
-                                turn_id,
-                                "Cancelled by user",
-                                partial_content=runner.assistant_content,
-                            )
+                        self._fail_turn(
+                            conversation_id,
+                            turn_id,
+                            "Cancelled by user",
+                            runner.assistant_content,
                         )
                         break
 
@@ -256,30 +254,20 @@ class ChatServiceWorker(QObject):
                     )
                 else:
                     error_text = error_detail.splitlines()[0]
-                self._emit(
-                    make_run_failed_event(
-                        conversation_id,
-                        turn_id,
-                        error_text,
-                        runner.assistant_content,
-                    )
-                )
-                self._persistence.update_conversation_by_pk(
-                    conversation_id, status="failed"
+                self._fail_turn(
+                    conversation_id, turn_id, error_text, runner.assistant_content
                 )
 
             except AgentBuildError as exc:
                 logger.error("Agent build failed: %s", exc)
-                self._emit(
-                    make_run_failed_event(
-                        conversation_id,
-                        turn_id,
-                        str(exc),
-                        runner.assistant_content,
-                    )
+                self._fail_turn(
+                    conversation_id, turn_id, str(exc), runner.assistant_content
                 )
-                self._persistence.update_conversation_by_pk(
-                    conversation_id, status="failed"
+
+            except AgentRunError as exc:
+                logger.error("Agent run failed (recoverable=%s): %s", exc.recoverable, exc)
+                self._fail_turn(
+                    conversation_id, turn_id, str(exc), runner.assistant_content
                 )
 
             except Exception as exc:
@@ -294,16 +282,8 @@ class ChatServiceWorker(QObject):
                         f"({max_steps}). Try asking a narrower question "
                         "or increase the agent step limit."
                     )
-                self._emit(
-                    make_run_failed_event(
-                        conversation_id,
-                        turn_id,
-                        error_text,
-                        runner.assistant_content,
-                    )
-                )
-                self._persistence.update_conversation_by_pk(
-                    conversation_id, status="failed"
+                self._fail_turn(
+                    conversation_id, turn_id, error_text, runner.assistant_content
                 )
 
             finally:
@@ -318,12 +298,32 @@ class ChatServiceWorker(QObject):
         """Emit a StreamEvent to the UI thread."""
         self.event_received.emit(event.to_dict())
 
+    def _fail_turn(
+        self,
+        conversation_id: str,
+        turn_id: str,
+        error_text: str,
+        partial_content: str = "",
+    ) -> None:
+        """Emit a run_failed event and mark the conversation as failed."""
+        self._emit(
+            make_run_failed_event(
+                conversation_id, turn_id, error_text, partial_content
+            )
+        )
+        self._persistence.update_conversation_by_pk(
+            conversation_id, status="failed"
+        )
+
     @staticmethod
     def _parse_provider(data: dict[str, Any]) -> Any:
-        """Parse provider dict into a ModelProvider-like object."""
-        from supervisor.models import ModelProvider
+        """Parse provider dict into a ModelProviderDTO."""
+        from shared.dto import ModelProviderDTO
 
-        return ModelProvider.from_dict(data)
+        return ModelProviderDTO(**{
+            k: v for k, v in data.items()
+            if k in ModelProviderDTO.__dataclass_fields__
+        })
 
     @staticmethod
     def _parse_skill(data: dict[str, Any] | None) -> ResolvedSkill | None:

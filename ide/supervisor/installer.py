@@ -363,6 +363,15 @@ class EnvironmentInstaller:
             config_path=check.config_path,
         )
 
+        # Run custom install steps (wheel + activation) using IDA Python.
+        custom_warnings: list[str] = []
+        if repair.ok and check.python_executable:
+            custom_result = self.run_custom_install_steps(
+                ida_python=check.python_executable,
+                ida_dir=str(Path(check.plugin_dir).parent) if check.plugin_dir else "",
+            )
+            custom_warnings = custom_result.get("warnings", [])
+
         if repair.ok:
             if repair.created:
                 summary = (
@@ -375,6 +384,7 @@ class EnvironmentInstaller:
         else:
             summary = f"reinstall incomplete: {repair.summary}"
 
+        all_warnings = repair.warnings.copy() + custom_warnings
         return InstallationActionResult(
             action="reinstall",
             ok=repair.ok,
@@ -383,8 +393,116 @@ class EnvironmentInstaller:
             config_path=repair.config_path,
             created=repair.created,
             already_exists=repair.already_exists,
-            warnings=repair.warnings.copy(),
+            warnings=all_warnings,
         )
+
+    def run_custom_install_steps(
+        self,
+        ida_python: str,
+        ida_dir: str = "",
+        on_progress=None,
+    ) -> dict:
+        """Run IDA-MCP custom install steps using IDA's Python.
+
+        Steps:
+          1. pip install idapro wheel from idalib/python/
+          2. Run py-activate-idalib.py
+        """
+        warnings: list[str] = []
+        ida_path = Path(ida_dir) if ida_dir else Path(ida_python).parent.parent
+
+        wheel_path = ida_path / "idalib" / "python" / "idapro-0.0.7-py3-none-any.whl"
+        activate_script = ida_path / "idalib" / "python" / "py-activate-idalib.py"
+
+        # Step 1: Install idapro wheel
+        if wheel_path.exists():
+            if on_progress:
+                on_progress(f"Installing idapro wheel: {wheel_path}")
+            try:
+                subprocess.run(
+                    [ida_python, "-m", "pip", "install", str(wheel_path)],
+                    capture_output=True, text=True, timeout=120,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                warnings.append(f"idapro wheel install failed: {exc.stderr[:200]}")
+            except FileNotFoundError:
+                warnings.append(f"IDA Python not found: {ida_python}")
+            except subprocess.TimeoutExpired:
+                warnings.append("idapro wheel install timed out")
+        else:
+            warnings.append(f"idapro wheel not found: {wheel_path}")
+
+        # Step 2: Run activation script
+        if activate_script.exists():
+            if on_progress:
+                on_progress(f"Running activation: {activate_script}")
+            try:
+                subprocess.run(
+                    [ida_python, str(activate_script)],
+                    capture_output=True, text=True, timeout=60,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                warnings.append(f"idalib activation failed: {exc.stderr[:200]}")
+            except FileNotFoundError:
+                warnings.append(f"IDA Python not found: {ida_python}")
+            except subprocess.TimeoutExpired:
+                warnings.append("idalib activation timed out")
+        else:
+            warnings.append(f"Activation script not found: {activate_script}")
+
+        return {"ok": len(warnings) == 0, "warnings": warnings}
+
+    def install_requirements(
+        self,
+        python_executable: str | Path | None = None,
+    ) -> InstallationActionResult:
+        """Install all packages from requirements.txt using pip."""
+        python = str(python_executable or sys.executable)
+        requirements_path = _resolve_requirements_path(self._repo_root)
+
+        if not requirements_path.exists():
+            return InstallationActionResult(
+                action="install_requirements",
+                ok=False,
+                summary=f"requirements.txt not found: {requirements_path}",
+                warnings=[],
+            )
+
+        try:
+            result = subprocess.run(
+                [python, "-m", "pip", "install", "-r", str(requirements_path)],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode == 0:
+                return InstallationActionResult(
+                    action="install_requirements",
+                    ok=True,
+                    summary="All requirements installed successfully.",
+                    warnings=[],
+                )
+            else:
+                return InstallationActionResult(
+                    action="install_requirements",
+                    ok=False,
+                    summary=f"pip install failed (exit {result.returncode})",
+                    warnings=[result.stderr[:500] if result.stderr else ""],
+                )
+        except FileNotFoundError:
+            return InstallationActionResult(
+                action="install_requirements",
+                ok=False,
+                summary=f"Python not found: {python}",
+                warnings=[],
+            )
+        except subprocess.TimeoutExpired:
+            return InstallationActionResult(
+                action="install_requirements",
+                ok=False,
+                summary="pip install timed out (300s)",
+                warnings=[],
+            )
 
     def _resolve_plugin_dir(
         self,

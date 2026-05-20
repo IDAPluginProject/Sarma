@@ -169,6 +169,10 @@ class SupervisorManager:
             warnings=warnings,
         )
 
+    def install_requirements(self) -> InstallationActionResult:
+        python_path = self._effective_python_path()
+        return self.installer.install_requirements(python_executable=python_path)
+
     # ------------------------------------------------------------------
     # Diaphora installation
     # ------------------------------------------------------------------
@@ -370,3 +374,38 @@ class SupervisorManager:
         from shared.paths import get_skills_dir
 
         return get_skills_dir()
+
+    # --- Agent model assignments ---
+
+    def get_agent_model_assignments(self) -> list[dict]:
+        rows = self._shared_db.load_rows("audit_agent_models")
+        providers = {p["id"]: p["name"] for p in self._shared_db.load_rows("model_providers")}
+        for row in rows:
+            pid = row.get("provider_id")
+            row["provider_name"] = providers.get(pid, "") if pid else ""
+        return rows
+
+    def update_agent_model_assignment(
+        self, agent_name: str, provider_id: int | None
+    ) -> bool:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._shared_db._connect() as conn:
+            cursor = conn.execute(
+                "SELECT id FROM audit_agent_models WHERE agent_name = ?",
+                (agent_name,),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE audit_agent_models SET provider_id = ?, updated_at = ? WHERE agent_name = ?",
+                    (provider_id, now, agent_name),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO audit_agent_models (agent_name, provider_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (agent_name, provider_id, now, now),
+                )
+            conn.commit()
+        return True

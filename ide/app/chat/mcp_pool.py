@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from app.chat.errors import McpConnectionError
 
 logger = logging.getLogger(__name__)
+
+
+def _config_fingerprint(configs: dict[str, dict[str, Any]]) -> str:
+    """Stable serialization of server configs for equality comparison."""
+    try:
+        return json.dumps(configs, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return ""
 
 
 class McpClientPool:
@@ -20,6 +29,7 @@ class McpClientPool:
     def __init__(self) -> None:
         self._client: Any | None = None  # MultiServerMCPClient
         self._server_configs: dict[str, dict[str, Any]] = {}
+        self._config_fingerprint: str = ""
         self._tools: list[Any] = []  # list[BaseTool]
         self._connected: bool = False
 
@@ -40,13 +50,15 @@ class McpClientPool:
             server_configs: Dict mapping server name → connection config,
                             as produced by McpServerEntry.to_langchain_config().
         """
-        if self._connected and self._server_configs == server_configs:
+        fingerprint = _config_fingerprint(server_configs)
+        if self._connected and fingerprint and fingerprint == self._config_fingerprint:
             return self._tools
 
         # Disconnect previous client if any
         await self.disconnect()
 
         self._server_configs = dict(server_configs)
+        self._config_fingerprint = fingerprint
 
         if not server_configs:
             self._tools = []
@@ -93,6 +105,7 @@ class McpClientPool:
                 self._client = None
         self._tools = []
         self._connected = False
+        self._config_fingerprint = ""
 
     def filter_tools(
         self,
