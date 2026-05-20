@@ -29,8 +29,9 @@ Sarma/
 │   │   ├── diaphora/            # Git submodule: Diaphora upstream
 │   │   ├── i18n/                # IDE localization resources
 │   │   └── icons/               # IDE icons
-│   └── tests/                   # IDE pytest suite
-├── skills/                      # Agent skill materials used by local workflows
+│   ├── tests/                   # IDE pytest suite
+│   └── resources/
+│       └── skills/              # Agent skill materials used by local workflows
 ├── codemap.md                   # Architecture atlas and entry-point index
 └── project.md                   # Repository project map
 ```

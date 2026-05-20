@@ -257,14 +257,10 @@ class AgentFactory:
                 f"Failed to initialize model: {exc}"
             ) from exc
 
-        # 5. Build agent — use audit pipeline only when skill requests it,
-        #    otherwise build a simple ReAct agent.
+        # 5. Build agent — audit mode uses the multi-stage pipeline,
+        #    chat mode uses a simple ReAct agent with full tool access.
         try:
-            use_audit_pipeline = (
-                config.skill is not None
-                and config.skill.name
-                and "audit" in config.skill.name.lower()
-            )
+            use_audit_pipeline = config.mode == "audit"
 
             if use_audit_pipeline:
                 from app.chat.audit_graph import build_audit_graph

@@ -71,6 +71,7 @@ class ChatPersistence:
                 model_name_snapshot=conv.model_name_snapshot,
                 skill_id=conv.skill_id,
                 system_prompt_override=conv.system_prompt_override or "",
+                mode=conv.mode,
                 status=conv.status,
                 created_at=conv.created_at,
                 updated_at=conv.updated_at,

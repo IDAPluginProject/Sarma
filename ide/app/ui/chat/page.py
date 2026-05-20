@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -78,14 +79,62 @@ class ChatPage(QWidget):
         self._presenter = ChatPresenter(supervisor_client)
         self._chat_service: ChatService | None = None
         self._persistence: ChatPersistence | None = None
-        self._current_conversation_id: str | None = None
+        self._chat_conversation_id: str | None = None
+        self._audit_conversation_id: str | None = None
         self._current_provider_id: int | None = None
         self._current_skill_id: int | None = None
-        self._is_running: bool = False
-        self._current_assistant_content: str = ""
-        self._current_mode: str = MODE_CHAT
+        self._chat_is_running: bool = False
+        self._audit_is_running: bool = False
+        self._chat_assistant_content: str = ""
+        self._audit_assistant_content: str = ""
+        self._current_mode: str = MODE_AUDIT
 
         self._build_ui()
+
+    @property
+    def _current_conversation_id(self) -> str | None:
+        if self._current_mode == MODE_CHAT:
+            return self._chat_conversation_id
+        return self._audit_conversation_id
+
+    @_current_conversation_id.setter
+    def _current_conversation_id(self, value: str | None) -> None:
+        if self._current_mode == MODE_CHAT:
+            self._chat_conversation_id = value
+        else:
+            self._audit_conversation_id = value
+
+    @property
+    def _message_list(self) -> MessageList:
+        if self._current_mode == MODE_CHAT:
+            return self._message_list_chat
+        return self._message_list_audit
+
+    @property
+    def _is_running(self) -> bool:
+        if self._current_mode == MODE_CHAT:
+            return self._chat_is_running
+        return self._audit_is_running
+
+    @_is_running.setter
+    def _is_running(self, value: bool) -> None:
+        if self._current_mode == MODE_CHAT:
+            self._chat_is_running = value
+        else:
+            self._audit_is_running = value
+
+    @property
+    def _current_assistant_content(self) -> str:
+        if self._current_mode == MODE_CHAT:
+            return self._chat_assistant_content
+        return self._audit_assistant_content
+
+    @_current_assistant_content.setter
+    def _current_assistant_content(self, value: str) -> None:
+        if self._current_mode == MODE_CHAT:
+            self._chat_assistant_content = value
+        else:
+            self._audit_assistant_content = value
 
     def _t(self, key: str, **kwargs: object) -> str:
         return self._i18n.t(key, **kwargs)
@@ -132,6 +181,8 @@ class ChatPage(QWidget):
         self._sidebar_toggle.toggled.connect(self._on_sidebar_toggled)
         toggle_layout.addWidget(self._sidebar_toggle)
 
+        toggle_layout.addStretch(1)
+
         self._mode_tab_bar = ModeTabBar()
         self._mode_tab_bar.mode_changed.connect(self._on_mode_changed)
         toggle_layout.addWidget(self._mode_tab_bar)
@@ -158,8 +209,13 @@ class ChatPage(QWidget):
         self._role_panel.role_selected.connect(self._on_role_selected)
         messages_row.addWidget(self._role_panel)
 
-        self._message_list = MessageList()
-        messages_row.addWidget(self._message_list)
+        self._message_list_chat = MessageList()
+        self._message_list_audit = MessageList()
+        self._message_stack = QStackedWidget()
+        self._message_stack.addWidget(self._message_list_chat)
+        self._message_stack.addWidget(self._message_list_audit)
+        self._message_stack.setCurrentWidget(self._message_list_audit)
+        messages_row.addWidget(self._message_stack)
 
         # Activity panel (MCP / Skills) on the right
         activity_wrapper = QWidget()
@@ -234,6 +290,11 @@ class ChatPage(QWidget):
         self._workflow_view.setVisible(is_audit)
         self._role_panel.setVisible(is_audit)
         self._activity_wrapper.setVisible(is_audit)
+        self._message_stack.setCurrentWidget(
+            self._message_list_audit if is_audit else self._message_list_chat
+        )
+        self._composer.set_running(self._is_running)
+        self._sidebar.set_mode_filter(mode)
 
     # ------------------------------------------------------------------
     # Public API
@@ -304,22 +365,29 @@ class ChatPage(QWidget):
             self._message_list.hide_thinking()
 
     def on_stream_event(self, event_dict: dict) -> None:
-        if event_dict.get("conversation_id") != self._current_conversation_id:
+        conv_id = event_dict.get("conversation_id")
+        if conv_id == self._chat_conversation_id:
+            target_list = self._message_list_chat
+            event_mode = MODE_CHAT
+        elif conv_id == self._audit_conversation_id:
+            target_list = self._message_list_audit
+            event_mode = MODE_AUDIT
+        else:
             return
 
         event_type = event_dict.get("type", "")
         payload = event_dict.get("payload", {})
 
-        # ---- workflow visualiser always sees everything ----
-        self._workflow_view.handle_event(event_dict)
+        if event_mode == MODE_AUDIT:
+            self._workflow_view.handle_event(event_dict)
 
         # ---- event dispatch ----
         if event_type == StreamEventType.RUN_STARTED:
-            self._on_run_started()
+            self._on_run_started(target_list, event_mode)
         elif event_type == StreamEventType.TOKEN:
-            self._on_token(payload)
+            self._on_token(payload, target_list, event_mode)
         elif event_type == StreamEventType.TOOL_START:
-            self._on_tool_start(payload)
+            self._on_tool_start(payload, target_list)
         elif event_type == StreamEventType.TOOL_RESULT:
             self._on_tool_result(payload)
         elif event_type == StreamEventType.TOOL_ERROR:
@@ -331,11 +399,11 @@ class ChatPage(QWidget):
         elif event_type == StreamEventType.SUBAGENT_ERROR:
             self._on_subagent_finish(payload, failed=True)
         elif event_type == StreamEventType.SKILL_TRIGGERED:
-            pass  # handled by workflow_view.handle_event above
+            pass
         elif event_type == StreamEventType.RUN_COMPLETED:
-            self._on_run_completed(payload)
+            self._on_run_completed(payload, target_list, event_mode)
         elif event_type == StreamEventType.RUN_FAILED:
-            self._on_run_failed(payload)
+            self._on_run_failed(payload, target_list, event_mode)
 
     # ------------------------------------------------------------------
     # Manager access
@@ -357,6 +425,7 @@ class ChatPage(QWidget):
         conv = self._chat_service.create_conversation(
             provider_id=self._current_provider_id,
             model_name=self._get_current_model_name(),
+            mode=self._current_mode,
         )
         self._sidebar.add_conversation(conv)
         self.load_conversation(conv.id)
@@ -418,6 +487,7 @@ class ChatPage(QWidget):
             conv = self._chat_service.create_conversation(
                 provider_id=self._current_provider_id,
                 model_name=self._get_current_model_name(),
+                mode=self._current_mode,
             )
             self._current_conversation_id = conv.id
             self._sidebar.add_conversation(conv)
@@ -488,22 +558,37 @@ class ChatPage(QWidget):
     # Stream event handlers
     # ------------------------------------------------------------------
 
-    def _on_run_started(self) -> None:
-        self._current_assistant_content = ""
-        self._message_list.show_thinking()
-        self._role_panel.reset_all()
-        self._role_panel.set_status("orchestrator", "running")
+    def _set_running_for_mode(self, mode: str, running: bool) -> None:
+        if mode == MODE_CHAT:
+            self._chat_is_running = running
+        else:
+            self._audit_is_running = running
+        if mode == self._current_mode:
+            self._composer.set_running(running)
 
-    def _on_token(self, payload: dict) -> None:
+    def _on_run_started(self, target_list: MessageList, event_mode: str) -> None:
+        if event_mode == MODE_CHAT:
+            self._chat_assistant_content = ""
+        else:
+            self._audit_assistant_content = ""
+        target_list.show_thinking()
+        if event_mode == MODE_AUDIT:
+            self._role_panel.reset_all()
+            self._role_panel.set_status("orchestrator", "running")
+
+    def _on_token(self, payload: dict, target_list: MessageList, event_mode: str) -> None:
         content = payload.get("content", "")
         if not content:
             return
         subagent = payload.get("subagent", "orchestrator")
-        self._current_assistant_content += content
-        self._message_list.hide_thinking()
-        self._message_list.append_chunk(content, subagent=subagent)
-        # Keep the role card message count roughly in sync.
-        self._role_panel.increment_message_count(subagent)
+        if event_mode == MODE_CHAT:
+            self._chat_assistant_content += content
+        else:
+            self._audit_assistant_content += content
+        target_list.hide_thinking()
+        target_list.append_chunk(content, subagent=subagent)
+        if event_mode == MODE_AUDIT:
+            self._role_panel.increment_message_count(subagent)
 
     def _on_subagent_start(self, payload: dict) -> None:
         name = payload.get("subagent", "")
@@ -515,37 +600,39 @@ class ChatPage(QWidget):
         if name:
             self._role_panel.set_status(name, "failed" if failed else "done")
 
-    def _on_tool_start(self, payload: dict) -> None:
-        # Tool calls render in the workflow activity panel exclusively.
-        self._message_list.hide_thinking()
-        # activity list is fed by WorkflowDagView.handle_event already.
+    def _on_tool_start(self, payload: dict, target_list: MessageList) -> None:
+        target_list.hide_thinking()
 
     def _on_tool_result(self, payload: dict) -> None:
-        pass  # activity panel only
+        pass
 
     def _on_tool_error(self, payload: dict) -> None:
-        pass  # activity panel only
+        pass
 
-    def _on_run_completed(self, payload: dict) -> None:
-        self._is_running = False
-        self._composer.set_running(False)
+    def _on_run_completed(self, payload: dict, target_list: MessageList, event_mode: str) -> None:
+        self._set_running_for_mode(event_mode, False)
         self._composer.clear_input()
-        self._message_list.hide_thinking()
-        self._role_panel.set_status("orchestrator", "done")
-        if self._current_conversation_id and self._persistence:
-            conv = self._persistence.get_conversation(self._current_conversation_id)
+        target_list.hide_thinking()
+        if event_mode == MODE_AUDIT:
+            self._role_panel.set_status("orchestrator", "done")
+        conv_id = (
+            self._chat_conversation_id if event_mode == MODE_CHAT
+            else self._audit_conversation_id
+        )
+        if conv_id and self._persistence:
+            conv = self._persistence.get_conversation(conv_id)
             if conv:
                 self._sidebar.update_conversation(conv)
 
-    def _on_run_failed(self, payload: dict) -> None:
-        self._is_running = False
-        self._composer.set_running(False)
-        self._message_list.hide_thinking()
+    def _on_run_failed(self, payload: dict, target_list: MessageList, event_mode: str) -> None:
+        self._set_running_for_mode(event_mode, False)
+        target_list.hide_thinking()
         error = payload.get("error", self._t("chat.tool.unknown_error"))
-        self._message_list.append_message(
+        target_list.append_message(
             "assistant", self._t("chat.error.prefix", error=error)
         )
-        self._role_panel.set_status("orchestrator", "failed")
+        if event_mode == MODE_AUDIT:
+            self._role_panel.set_status("orchestrator", "failed")
 
     # ------------------------------------------------------------------
     # Slot wrapper

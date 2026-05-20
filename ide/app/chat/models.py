@@ -32,6 +32,7 @@ class Conversation:
     model_name_snapshot: str = ""
     skill_id: int | None = None
     system_prompt_override: str | None = None
+    mode: str = "audit"  # chat | audit
     status: str = "idle"  # idle | running | failed
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
@@ -281,6 +282,5 @@ class AgentRunConfig:
     message_history: list[ChatMessage]
     user_message: str
     system_prompt: str
-    # LangGraph needs a finite recursion_limit; use a very high value so long
-    # reverse-engineering traces are effectively bounded by context/tool limits.
+    mode: str = "audit"  # chat | audit
     max_steps: int = 100_000

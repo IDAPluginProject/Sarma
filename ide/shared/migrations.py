@@ -128,3 +128,8 @@ def apply_migrations(conn: sqlite3.Connection, current: int, target: int) -> Non
                 updated_at  TEXT    NOT NULL DEFAULT ''
             )
         """)
+
+    if current < 11:
+        _add_col_if_missing(
+            conn, "conversations", "mode", "TEXT NOT NULL DEFAULT 'audit'"
+        )

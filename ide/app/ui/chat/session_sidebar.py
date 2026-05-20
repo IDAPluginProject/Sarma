@@ -136,6 +136,7 @@ class SessionSidebar(QWidget):
         self._persistence = persistence
         self._active_id: str | None = None
         self._items: dict[str, ConversationItem] = {}
+        self._mode_filter: str | None = None
 
         self._build_ui()
 
@@ -204,6 +205,11 @@ class SessionSidebar(QWidget):
     def set_persistence(self, persistence: ChatPersistence) -> None:
         self._persistence = persistence
 
+    def set_mode_filter(self, mode: str) -> None:
+        """Filter sidebar to only show conversations for the given mode."""
+        self._mode_filter = mode
+        self.refresh()
+
     def refresh(self) -> None:
         """Reload conversation list from persistence."""
         if self._persistence is None:
@@ -217,6 +223,8 @@ class SessionSidebar(QWidget):
 
         conversations = self._persistence.list_conversations()
         for conv in conversations:
+            if self._mode_filter and getattr(conv, "mode", None) != self._mode_filter:
+                continue
             self._add_item(conv)
 
         # Restore active selection

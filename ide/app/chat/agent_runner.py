@@ -40,6 +40,7 @@ class AgentRunner:
         system_prompt: str,
         conversation_id: str,
         turn_id: str,
+        mode: str = "audit",
     ) -> None:
         self._factory = factory
         self._pool = pool
@@ -50,6 +51,7 @@ class AgentRunner:
         self._system_prompt = system_prompt
         self._conversation_id = conversation_id
         self._turn_id = turn_id
+        self._mode = mode
         self.assistant_content = ""
         self.reasoning_content = ""
         self.tool_calls: list[StreamEvent] = []
@@ -67,6 +69,7 @@ class AgentRunner:
             message_history=self._history,
             user_message=message,
             system_prompt=self._system_prompt,
+            mode=self._mode,
         )
 
         agent, _tools = await self._factory.build(self.run_config)
