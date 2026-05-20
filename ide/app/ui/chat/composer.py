@@ -216,3 +216,15 @@ class Composer(QWidget):
 
     def clear_input(self) -> None:
         self._input.clear()
+
+    def set_prototype_style(self, enabled: bool) -> None:
+        """Toggle the wireframe-style dashed border for the composer container.
+
+        When enabled the QFrame's objectName flips to ``chatComposerPrototype``
+        so the theme QSS picks up the dashed-border variant. Style polishing is
+        forced so the visual updates immediately.
+        """
+        name = "chatComposerPrototype" if enabled else "chatComposerContainer"
+        self._container.setObjectName(name)
+        self._container.style().unpolish(self._container)
+        self._container.style().polish(self._container)

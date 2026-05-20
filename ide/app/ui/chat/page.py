@@ -1,23 +1,44 @@
-"""Chat page — sidebar + message list + composer.
+"""Chat page — sidebar + workflow DAG + role panel + message list + composer.
 
-Layout:
-```
-QSplitter (Horizontal)
-├── SessionSidebar  (left, 200px)
-└── QSplitter (Vertical)
-    ├── MessageList  (top, 4/5)
-    └── Composer     (bottom, 1/5, with ProviderSelector)
-```
+Layout
+======
+
+::
+
+    QSplitter (Horizontal)
+    ├── SessionSidebar  (left, hidden by default; toggle via ≡ button)
+    └── QVBoxLayout (center)
+        ├── Toggle row (≡ button)
+        ├── QSplitter (Vertical) – main area
+        │   ├── QSplitter (Horizontal) – workflow row (~260 px)
+        │   │   ├── WorkflowDagView       (left, flex)
+        │   │   └── ActivityList           (right, 280 px)
+        │   ├── QSplitter (Horizontal) – messages row (flex)
+        │   │   ├── RolePanel              (left, 170 px)
+        │   │   └── MessageList            (right, flex)
+        │   └── Composer (bottom, prototype-style border)
+        └── (end)
+
+Tool-call cards no longer appear in the message list — they live in the
+activity panel alongside the workflow DAG.  Token events are routed to
+the message list with a ``subagent`` annotation so the role-panel filter
+can show / hide blocks by agent.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.chat.chat_service import ChatService
 from app.chat.persistence import ChatPersistence
@@ -25,8 +46,10 @@ from app.presenters.chat_presenter import ChatPresenter, MessageViewModel
 from app.ui.chat.composer import Composer
 from app.ui.chat.message_list import MessageList
 from app.ui.chat.provider_selector import ProviderSelector
+from app.ui.chat.role_panel import RolePanel
 from app.services.supervisor_client import SupervisorClient
 from app.ui.chat.session_sidebar import SessionSidebar
+from app.ui.chat.workflow_view import WorkflowDagView, _ActivityList
 
 if TYPE_CHECKING:
     from app.i18n import I18n
@@ -74,45 +97,104 @@ class ChatPage(QWidget):
         layout.setSpacing(0)
 
         # Horizontal splitter: sidebar | center
-        self._h_splitter = QSplitter(Qt.Horizontal)
+        self._h_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._h_splitter.setChildrenCollapsible(True)
         self._h_splitter.setHandleWidth(1)
 
-        # --- Session sidebar (left) ---
+        # --- Session sidebar (left, collapsed by default) ---
         self._sidebar = SessionSidebar(self._i18n)
         self._sidebar.conversation_selected.connect(self._on_conversation_selected)
         self._sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self._sidebar.conversation_deleted.connect(self._on_conversation_deleted)
+        self._sidebar.hide()
         self._h_splitter.addWidget(self._sidebar)
 
-        # --- Center: vertical splitter (messages 4/5 | composer 1/5) ---
-        self._v_splitter = QSplitter(Qt.Vertical)
+        # --- Center: vertical stack ---
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+
+        # Toggle row
+        toggle_row = QWidget()
+        toggle_layout = QHBoxLayout(toggle_row)
+        toggle_layout.setContentsMargins(8, 6, 8, 2)
+        toggle_layout.setSpacing(0)
+        self._sidebar_toggle = QPushButton("≡")
+        self._sidebar_toggle.setObjectName("sidebarToggleButton")
+        self._sidebar_toggle.setCheckable(True)
+        self._sidebar_toggle.setFixedSize(28, 24)
+        self._sidebar_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sidebar_toggle.setToolTip(self._t("chat.session.title"))
+        self._sidebar_toggle.toggled.connect(self._on_sidebar_toggled)
+        toggle_layout.addWidget(self._sidebar_toggle)
+        toggle_layout.addStretch(1)
+        center_layout.addWidget(toggle_row)
+
+        # --- Main vertical splitter ---
+        self._v_splitter = QSplitter(Qt.Orientation.Vertical)
         self._v_splitter.setChildrenCollapsible(False)
         self._v_splitter.setHandleWidth(1)
 
-        # Message list (top, 80%)
-        self._message_list = MessageList()
-        self._v_splitter.addWidget(self._message_list)
+        # ---- 1. Workflow row (DAG fills full width) ----
+        self._workflow_view = WorkflowDagView(self._i18n)
+        self._v_splitter.addWidget(self._workflow_view)
 
-        # Composer (bottom, 20%)
+        # ---- 2. Messages row: RolePanel | MessageList | Activity ----
+        messages_row = QSplitter(Qt.Orientation.Horizontal)
+        messages_row.setHandleWidth(1)
+
+        self._role_panel = RolePanel(self._i18n)
+        self._role_panel.setMinimumWidth(160)
+        self._role_panel.setMaximumWidth(200)
+        self._role_panel.role_selected.connect(self._on_role_selected)
+        messages_row.addWidget(self._role_panel)
+
+        self._message_list = MessageList()
+        messages_row.addWidget(self._message_list)
+
+        # Activity panel (MCP / Skills) on the right
+        activity_wrapper = QWidget()
+        activity_wrapper.setObjectName("activityWrapper")
+        aw_layout = QVBoxLayout(activity_wrapper)
+        aw_layout.setContentsMargins(0, 0, 0, 0)
+        aw_layout.setSpacing(0)
+        activity_title = QLabel(self._t("chat.activity.title", default="MCP / Skills"))
+        activity_title.setObjectName("activityTitle")
+        aw_layout.addWidget(activity_title)
+        self._activity_list = _ActivityList()
+        self._workflow_view.attach_activity_list(self._activity_list)
+        aw_layout.addWidget(self._activity_list, 1)
+        self._activity_wrapper = activity_wrapper
+        messages_row.addWidget(activity_wrapper)
+
+        messages_row.setSizes([170, 600, 280])
+        messages_row.setStretchFactor(0, 0)
+        messages_row.setStretchFactor(1, 1)
+        messages_row.setStretchFactor(2, 0)
+        self._v_splitter.addWidget(messages_row)
+
+        # ---- 3. Composer ----
         self._composer = Composer(self._i18n)
+        self._composer.set_prototype_style(True)
         self._composer.message_submitted.connect(self._on_message_submitted)
         self._composer.stop_requested.connect(self._on_stop_requested)
         self._composer.clear_requested.connect(self._on_clear_requested)
 
-        # Provider selector only (skill selector removed — managed in Settings)
         self._provider_selector = ProviderSelector(self._i18n)
         self._provider_selector.provider_changed.connect(self._on_provider_changed)
         self._composer.add_selector(self._provider_selector)
-
         self._v_splitter.addWidget(self._composer)
-        # 4 : 1 ratio → message list 4/5, composer 1/5
-        self._v_splitter.setSizes([768, 192])
-        self._v_splitter.setStretchFactor(0, 4)
-        self._v_splitter.setStretchFactor(1, 1)
 
-        self._h_splitter.addWidget(self._v_splitter)
-        self._h_splitter.setSizes([200, 1020])
+        # Initial sizes: workflow half, messages half, composer compact
+        self._v_splitter.setSizes([350, 350, 120])
+        self._v_splitter.setStretchFactor(0, 1)  # workflow row
+        self._v_splitter.setStretchFactor(1, 1)  # messages row
+        self._v_splitter.setStretchFactor(2, 0)  # composer
+
+        center_layout.addWidget(self._v_splitter, 1)
+        self._h_splitter.addWidget(center)
+        self._h_splitter.setSizes([0, 1220])
         self._h_splitter.setStretchFactor(0, 0)
         self._h_splitter.setStretchFactor(1, 1)
 
@@ -122,15 +204,25 @@ class ChatPage(QWidget):
         self._refresh_skills()
 
     # ------------------------------------------------------------------
+    # Sidebar toggle
+    # ------------------------------------------------------------------
+
+    def _on_sidebar_toggled(self, checked: bool) -> None:
+        if checked:
+            self._sidebar.show()
+            self._h_splitter.setSizes([220, max(1000, self.width() - 220)])
+        else:
+            self._sidebar.hide()
+            self._h_splitter.setSizes([0, max(1, self.width())])
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def refresh_providers(self) -> None:
-        """Refresh the provider selector after model providers change."""
         self._refresh_models()
 
     def retranslate(self) -> None:
-        """Refresh all translatable text after a language change."""
         self._sidebar.retranslate()
         self._composer.retranslate()
         self._provider_selector.update_providers(
@@ -168,23 +260,12 @@ class ChatPage(QWidget):
                     "assistant", vm.content, show_role=vm.show_role
                 )
             elif vm.role == "tool":
-                self._message_list.add_tool_trace(
-                    vm.tool_name,
-                    self._t("chat.tool.completed"),
-                    summary=vm.summary,
-                    args_text=vm.args_text,
-                )
-                if vm.result_text:
-                    self._message_list.update_last_tool_trace(
-                        vm.tool_name,
-                        self._t("chat.tool.completed"),
-                        summary=vm.summary,
-                        result=vm.result_text,
-                    )
+                # Tool traces are now rendered in the workflow activity
+                # panel, not the message list.  Skip silently.
+                pass
 
         self._sidebar.set_active(conversation_id)
 
-        # Restore provider selector from conversation metadata
         conv = self._persistence.get_conversation(conversation_id)
         if conv and conv.provider_id is not None:
             self._current_provider_id = conv.provider_id
@@ -193,7 +274,6 @@ class ChatPage(QWidget):
                 self._current_provider_id,
             )
 
-        # Restore running state if the conversation is still active
         if conv and conv.status == "running":
             self._is_running = True
             self._composer.set_running(True)
@@ -204,13 +284,16 @@ class ChatPage(QWidget):
             self._message_list.hide_thinking()
 
     def on_stream_event(self, event_dict: dict) -> None:
-        # Ignore events for other conversations to keep sessions isolated.
         if event_dict.get("conversation_id") != self._current_conversation_id:
             return
 
         event_type = event_dict.get("type", "")
         payload = event_dict.get("payload", {})
 
+        # ---- workflow visualiser always sees everything ----
+        self._workflow_view.handle_event(event_dict)
+
+        # ---- event dispatch ----
         if event_type == "run_started":
             self._on_run_started()
         elif event_type == "token":
@@ -221,6 +304,14 @@ class ChatPage(QWidget):
             self._on_tool_result(payload)
         elif event_type == "tool_error":
             self._on_tool_error(payload)
+        elif event_type == "subagent_start":
+            self._on_subagent_start(payload)
+        elif event_type == "subagent_complete":
+            self._on_subagent_finish(payload, failed=False)
+        elif event_type == "subagent_error":
+            self._on_subagent_finish(payload, failed=True)
+        elif event_type == "skill_triggered":
+            pass  # handled by workflow_view.handle_event above
         elif event_type == "run_completed":
             self._on_run_completed(payload)
         elif event_type == "run_failed":
@@ -231,7 +322,6 @@ class ChatPage(QWidget):
     # ------------------------------------------------------------------
 
     def _get_current_model_name(self) -> str:
-        """Return the display name of the currently selected provider."""
         return self._presenter.get_provider_display_name(self._current_provider_id)
 
     # ------------------------------------------------------------------
@@ -244,7 +334,6 @@ class ChatPage(QWidget):
     def _on_new_conversation(self) -> None:
         if self._chat_service is None:
             return
-
         conv = self._chat_service.create_conversation(
             provider_id=self._current_provider_id,
             model_name=self._get_current_model_name(),
@@ -256,26 +345,31 @@ class ChatPage(QWidget):
     def _on_conversation_deleted(self, conversation_id: str) -> None:
         if self._persistence is None:
             return
-
         self._persistence.delete_conversation(conversation_id)
         self._sidebar.remove_conversation(conversation_id)
-
         if self._current_conversation_id == conversation_id:
             self._current_conversation_id = None
             self._message_list.clear_messages()
+
+    # ------------------------------------------------------------------
+    # Role panel
+    # ------------------------------------------------------------------
+
+    def _on_role_selected(self, role_id: str) -> None:
+        self._message_list.set_subagent_filter(role_id)
 
     # ------------------------------------------------------------------
     # Message submission
     # ------------------------------------------------------------------
 
     def _on_stop_requested(self) -> None:
-        """Cancel the active agent turn."""
         if self._is_running and self._chat_service:
             self._chat_service.cancel_turn()
 
     def _on_clear_requested(self) -> None:
-        """Clear all messages in the current conversation."""
         self._message_list.clear_messages()
+        self._workflow_view.begin_run()
+        self._role_panel.reset_all()
         if self._current_conversation_id and self._persistence:
             self._persistence.delete_conversation(self._current_conversation_id)
             self._sidebar.remove_conversation(self._current_conversation_id)
@@ -284,7 +378,6 @@ class ChatPage(QWidget):
     def _on_message_submitted(self, text: str) -> None:
         if self._is_running:
             return
-
         if self._chat_service is None:
             logger.warning("ChatService not set, ignoring message")
             return
@@ -311,7 +404,6 @@ class ChatPage(QWidget):
             self.conversation_created.emit(conv.id)
 
         self._message_list.append_message("user", text)
-
         self._chat_service.send_message(
             conversation_id=self._current_conversation_id,
             user_message=text,
@@ -365,7 +457,6 @@ class ChatPage(QWidget):
         self._provider_selector.update_providers(model_data, active_id)
 
     def _refresh_skills(self) -> None:
-        """Resolve active skills from DB (settings-managed)."""
         try:
             skills = self._presenter.list_available_skills()
             if skills and self._current_skill_id is None:
@@ -380,50 +471,47 @@ class ChatPage(QWidget):
     def _on_run_started(self) -> None:
         self._current_assistant_content = ""
         self._message_list.show_thinking()
+        self._role_panel.reset_all()
+        self._role_panel.set_status("orchestrator", "running")
 
     def _on_token(self, payload: dict) -> None:
-        chunk = payload.get("content", "")
-        self._current_assistant_content += chunk
+        content = payload.get("content", "")
+        if not content:
+            return
+        subagent = payload.get("subagent", "orchestrator")
+        self._current_assistant_content += content
         self._message_list.hide_thinking()
-        self._message_list.append_chunk(chunk)
+        self._message_list.append_chunk(content, subagent=subagent)
+        # Keep the role card message count roughly in sync.
+        self._role_panel.increment_message_count(subagent)
+
+    def _on_subagent_start(self, payload: dict) -> None:
+        name = payload.get("subagent", "")
+        if name:
+            self._role_panel.set_status(name, "running")
+
+    def _on_subagent_finish(self, payload: dict, failed: bool = False) -> None:
+        name = payload.get("subagent", "")
+        if name:
+            self._role_panel.set_status(name, "failed" if failed else "done")
 
     def _on_tool_start(self, payload: dict) -> None:
-        tool_name = payload.get("tool_name", self._t("chat.tool.unknown"))
-        args = payload.get("args", {})
-        args_text = ""
-        if args:
-            try:
-                import json
-                args_text = json.dumps(args, ensure_ascii=False)
-            except (TypeError, ValueError):
-                args_text = str(args)
-        # Hide thinking indicator so the preceding text segment is visible
+        # Tool calls render in the workflow activity panel exclusively.
         self._message_list.hide_thinking()
-        self._message_list.add_tool_trace(
-            tool_name, self._t("chat.tool.running"), args_text=args_text
-        )
+        # activity list is fed by WorkflowDagView.handle_event already.
 
     def _on_tool_result(self, payload: dict) -> None:
-        tool_name = payload.get("tool_name", "")
-        result = payload.get("result", "")
-        summary = result[:100] if result else self._t("chat.tool.done")
-        self._message_list.update_last_tool_trace(
-            tool_name, self._t("chat.tool.completed"), summary, result=result
-        )
+        pass  # activity panel only
 
     def _on_tool_error(self, payload: dict) -> None:
-        tool_name = payload.get("tool_name", "")
-        error = payload.get("error", self._t("chat.tool.unknown_error"))
-        self._message_list.update_last_tool_trace(
-            tool_name, self._t("chat.tool.failed"), error[:100], result=error
-        )
+        pass  # activity panel only
 
     def _on_run_completed(self, payload: dict) -> None:
         self._is_running = False
         self._composer.set_running(False)
         self._composer.clear_input()
         self._message_list.hide_thinking()
-
+        self._role_panel.set_status("orchestrator", "done")
         if self._current_conversation_id and self._persistence:
             conv = self._persistence.get_conversation(self._current_conversation_id)
             if conv:
@@ -437,6 +525,7 @@ class ChatPage(QWidget):
         self._message_list.append_message(
             "assistant", self._t("chat.error.prefix", error=error)
         )
+        self._role_panel.set_status("orchestrator", "failed")
 
     # ------------------------------------------------------------------
     # Slot wrapper

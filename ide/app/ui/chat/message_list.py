@@ -258,9 +258,11 @@ class MessageBlock(QFrame):
     def __init__(
         self, role: str, content: str, show_role: bool = True,
         parent: QWidget | None = None,
+        subagent: str = "orchestrator",
     ) -> None:
         super().__init__(parent)
         self._role = role
+        self._subagent = subagent
         self.setObjectName("chatMessageBlock")
 
         layout = QVBoxLayout(self)
@@ -309,6 +311,10 @@ class MessageBlock(QFrame):
         if self._content_label is not None:
             return self._content_label.text()
         return ""
+
+    @property
+    def subagent(self) -> str:
+        return self._subagent
 
 
 # ---------------------------------------------------------------------------
@@ -576,27 +582,40 @@ class MessageList(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._scroll)
 
+        self._blocks: list[MessageBlock] = []
         self._last_assistant_block: MessageBlock | None = None
         self._thinking: ThinkingIndicator | None = None
         self._thinking_divider: QFrame | None = None
         self._turn_count = 0
         self._trace_cards: list[ToolTraceCard] = []
         self._assistant_segments_in_turn: int = 0  # tracks continuation blocks
+        self._subagent_filter: str | None = None
 
     def _insert_before_stretch(self, widget: QWidget) -> None:
         """Insert a widget immediately before the trailing stretch."""
         count = self._messages_layout.count()
         self._messages_layout.insertWidget(count - 1, widget)
 
-    def append_message(self, role: str, content: str, show_role: bool = True) -> None:
-        """Add a new message with optional turn divider."""
+    def append_message(
+        self, role: str, content: str, show_role: bool = True,
+        subagent: str = "orchestrator",
+    ) -> None:
+        """Add a new message with optional turn divider.
+
+        Messages are always stored, but only rendered when they match
+        the active subagent filter (or when no filter is set).
+        """
         # Insert divider before user messages (except the very first message)
         if role == "user" and self._turn_count > 0:
             divider = TurnDivider()
             self._insert_before_stretch(divider)
 
-        block = MessageBlock(role, content, show_role=show_role)
+        block = MessageBlock(role, content, show_role=show_role, subagent=subagent)
+        self._blocks.append(block)
         self._insert_before_stretch(block)
+
+        if self._subagent_filter is not None:
+            block.setVisible(subagent == self._subagent_filter)
 
         if role == "assistant":
             self._last_assistant_block = block
@@ -607,16 +626,20 @@ class MessageList(QWidget):
 
         self.scroll_to_bottom()
 
-    def append_chunk(self, content: str) -> None:
+    def append_chunk(self, content: str, subagent: str = "orchestrator") -> None:
         """Append streaming text to the last assistant block.
 
-        If no assistant block is active (e.g. after a tool card was
-        inserted), creates a new continuation block without the
-        "Assistant" role label.
+        If no assistant block is active or the subagent changed, creates
+        a new continuation block.
         """
-        if self._last_assistant_block is None:
+        if (
+            self._last_assistant_block is None
+            or self._last_assistant_block.subagent != subagent
+        ):
             show_role = self._assistant_segments_in_turn == 0
-            self.append_message("assistant", content, show_role=show_role)
+            self.append_message(
+                "assistant", content, show_role=show_role, subagent=subagent
+            )
         else:
             self._last_assistant_block.append_text(content)
         self.scroll_to_bottom()
@@ -696,12 +719,27 @@ class MessageList(QWidget):
             item = self._messages_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._blocks.clear()
         self._last_assistant_block = None
         self._thinking = None
         self._thinking_divider = None
         self._trace_cards.clear()
         self._turn_count = 0
         self._assistant_segments_in_turn = 0
+
+    def set_subagent_filter(self, subagent: str | None) -> None:
+        """Show only messages from the given subagent.
+
+        Pass ``None`` to show all messages (unfiltered).
+        """
+        self._subagent_filter = subagent
+        if subagent is None:
+            for block in self._blocks:
+                block.setVisible(True)
+        else:
+            for block in self._blocks:
+                block.setVisible(block.subagent == subagent)
+        self.scroll_to_bottom()
 
     def scroll_to_bottom(self) -> None:
         scrollbar = self._scroll.verticalScrollBar()

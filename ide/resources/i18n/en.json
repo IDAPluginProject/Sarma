@@ -333,5 +333,15 @@
   "chat.skill.none": "No Skill",
   "chat.skill.empty": "(No skills)",
   "chat.code.copy": "Copy",
-  "chat.code.copied": "Copied!"
+  "chat.code.copied": "Copied!",
+  "chat.workflow.title": "Workflow",
+  "chat.workflow.node.orchestrator": "Orchestrator",
+  "chat.workflow.node.recon": "Recon",
+  "chat.workflow.node.hunt": "Hunt",
+  "chat.workflow.node.validate": "Validate",
+  "chat.workflow.node.gapfill": "Gapfill",
+  "chat.workflow.node.dedupe": "Dedupe",
+  "chat.workflow.node.trace": "Trace",
+  "chat.workflow.node.feedback": "Feedback",
+  "chat.workflow.node.report": "Report"
 }

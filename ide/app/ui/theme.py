@@ -383,6 +383,9 @@ class Theme:
             self._card_detail_styles(c, m),
             self._dialog_styles(c, m),
             self._chat_layout_styles(c, m),
+            self._chat_composer_prototype_styles(c, m),
+            self._chat_workflow_styles(c, m),
+            self._chat_role_panel_styles(c, m),
             self._chat_role_styles(c, m),
             self._chat_thinking_styles(c, m),
             self._tool_trace_card_styles(c, m),
@@ -1243,6 +1246,176 @@ class Theme:
         QFrame#chatMessageBlock {{
             background: transparent;
             border: none;
+        }}"""
+
+    # -- Chat composer prototype-style border --
+
+    @staticmethod
+    def _chat_composer_prototype_styles(c: _Palette, m: _Metrics) -> str:
+        """Wireframe-style dashed border for the centered composer.
+
+        Active when the page is in "audit landing" mode (no conversation yet
+        or sidebar collapsed). Container uses ``objectName`` ``chatComposerPrototype``.
+        """
+        return f"""
+        QFrame#chatComposerPrototype {{
+            background: {c.input_bg};
+            border: 2px dashed {c.border};
+            border-radius: 16px;
+        }}
+        QFrame#chatComposerPrototype:focus, QFrame#chatComposerPrototype[focused="true"] {{
+            border: 2px dashed {c.accent};
+        }}
+        QLabel#chatPrototypeHint {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_sm};
+            padding: 4px 0px;
+        }}
+        QPushButton#sidebarToggleButton {{
+            background: transparent;
+            color: {c.text_secondary};
+            border: 1px solid {c.border};
+            border-radius: 6px;
+            font-size: 14px;
+            padding: 2px 8px;
+        }}
+        QPushButton#sidebarToggleButton:hover {{
+            background: {c.panel_bg};
+            color: {c.text_primary};
+            border-color: {c.accent};
+        }}
+        QPushButton#sidebarToggleButton:checked {{
+            background: {c.accent};
+            color: {c.accent_text};
+            border-color: {c.accent};
+        }}"""
+
+    # -- Workflow DAG visualisation --
+
+    @staticmethod
+    def _chat_workflow_styles(c: _Palette, m: _Metrics) -> str:
+        return f"""
+        QWidget#workflowPanel {{
+            background: {c.panel_bg};
+            border-top: 1px solid {c.border_light};
+        }}
+        QGraphicsView#workflowGraphView {{
+            background: {c.panel_bg};
+            border: none;
+        }}
+        QWidget#workflowActivityList,
+        QWidget#workflowActivityContainer {{
+            background: {c.panel_bg};
+        }}
+        QScrollArea#workflowActivityScroll {{
+            background: {c.panel_bg};
+            border: none;
+        }}
+        QScrollArea#workflowActivityScroll > QWidget > QWidget {{
+            background: {c.panel_bg};
+        }}
+        QLabel#workflowTitle {{
+            color: {c.text_primary};
+            font-size: {m.font_size_base};
+            font-weight: {m.font_weight_semibold};
+            padding: 6px 12px;
+        }}
+        QLabel#workflowSubtitle {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_xs};
+            padding: 0px 12px 6px 12px;
+        }}
+        QFrame#workflowActivityCard {{
+            background: {c.input_bg};
+            border: 1px solid {c.border};
+            border-radius: 8px;
+            margin: 4px 12px;
+        }}
+        QLabel#workflowActivityTitle {{
+            color: {c.text_primary};
+            font-size: {m.font_size_sm};
+            font-weight: {m.font_weight_semibold};
+        }}
+        QLabel#workflowActivityDetail {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_xs};
+        }}
+        QWidget#activityWrapper {{
+            background: {c.panel_bg};
+            border-top: 1px solid {c.border_light};
+        }}
+        QLabel#activityTitle {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_xs};
+            font-weight: {m.font_weight_semibold};
+            padding: 8px 12px 4px 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}"""
+
+    # -- Chat role panel (subagent cards) --
+
+    @staticmethod
+    def _chat_role_panel_styles(c: _Palette, m: _Metrics) -> str:
+        return f"""
+        QWidget#rolePanel {{
+            background: {c.panel_bg};
+        }}
+        QLabel#rolePanelTitle {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_xs};
+            font-weight: {m.font_weight_semibold};
+            padding: 8px 12px 4px 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+        QScrollArea#rolePanelScroll {{
+            background: {c.panel_bg};
+            border: none;
+        }}
+        QWidget#roleCardContainer {{
+            background: {c.panel_bg};
+        }}
+        QFrame#roleCard {{
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            padding: 4px 8px;
+        }}
+        QFrame#roleCard:hover {{
+            background: {c.input_bg};
+            border-color: {c.border};
+        }}
+        QFrame#roleCard[selected="true"] {{
+            background: {c.input_bg};
+            border-color: {c.accent};
+        }}
+        QFrame#roleCard[status="running"] {{
+            background: {c.input_bg};
+        }}
+        QLabel#roleCardGlyph {{
+            color: {c.text_secondary};
+            font-size: 14px;
+        }}
+        QFrame#roleCard[status="running"] QLabel#roleCardGlyph {{
+            color: {c.accent};
+        }}
+        QFrame#roleCard[status="done"] QLabel#roleCardGlyph {{
+            color: {c.status_ok};
+        }}
+        QFrame#roleCard[status="failed"] QLabel#roleCardGlyph {{
+            color: {c.status_error};
+        }}
+        QLabel#roleCardLabel {{
+            color: {c.text_primary};
+            font-size: {m.font_size_sm};
+        }}
+        QLabel#roleCardCount {{
+            color: {c.text_secondary};
+            font-size: {m.font_size_xs};
+            background: {c.input_bg};
+            border-radius: 8px;
+            padding: 1px 6px;
         }}"""
 
     # -- Chat role labels --
