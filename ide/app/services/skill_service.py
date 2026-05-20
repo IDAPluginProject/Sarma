@@ -16,10 +16,94 @@ from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
+_NATIVE_SKILLS_DIR_NAME = "skills"
+
 
 class SkillService:
     def __init__(self, settings_service: SettingsService | None = None) -> None:
         self._settings_service = settings_service or SettingsService()
+
+    def seed_native_skills(self) -> None:
+        """Register built-in skills from the bundled skills/ directory.
+
+        Scans each subdirectory for a SKILL.md (with YAML frontmatter) or
+        skill.json manifest. Skips skills already registered by name.
+        """
+        try:
+            native_dir = self._get_native_skills_source()
+            if not native_dir or not native_dir.is_dir():
+                logger.debug("No native skills directory found")
+                return
+
+            existing_names = {s.name for s in self._settings_service.get_skills()}
+            skills_dir = self._settings_service.get_skills_dir()
+            skills_dir.mkdir(parents=True, exist_ok=True)
+
+            for entry in sorted(native_dir.iterdir()):
+                if not entry.is_dir():
+                    continue
+                meta = self._read_skill_metadata(entry)
+                if not meta:
+                    continue
+                name = meta["name"]
+                if name in existing_names:
+                    continue
+
+                dest = skills_dir / name
+                if not dest.exists():
+                    shutil.copytree(entry, dest)
+
+                now = datetime.now(timezone.utc).isoformat()
+                self._settings_service.add_skill(
+                    name=name,
+                    description=meta.get("description", ""),
+                    version=meta.get("version", ""),
+                    file_path="",
+                    install_dir=name,
+                    installed_at=now,
+                )
+                logger.info("Seeded native skill: %s", name)
+        except Exception as exc:
+            logger.error("Failed to seed native skills: %s", exc)
+
+    @staticmethod
+    def _get_native_skills_source() -> Path | None:
+        """Locate the bundled skills/ directory relative to the project root."""
+        import sys
+
+        candidates = [
+            Path(__file__).resolve().parents[3] / _NATIVE_SKILLS_DIR_NAME,
+            Path(__file__).resolve().parents[2] / _NATIVE_SKILLS_DIR_NAME,
+            Path(sys.argv[0]).resolve().parent / _NATIVE_SKILLS_DIR_NAME,
+            Path(sys.argv[0]).resolve().parent.parent / _NATIVE_SKILLS_DIR_NAME,
+            Path.cwd() / _NATIVE_SKILLS_DIR_NAME,
+            Path.cwd().parent / _NATIVE_SKILLS_DIR_NAME,
+        ]
+        for c in candidates:
+            if c.is_dir():
+                return c
+        return None
+
+    @staticmethod
+    def _read_skill_metadata(skill_dir: Path) -> dict[str, str] | None:
+        """Read skill name/description from skill.json or SKILL.md frontmatter."""
+        manifest = skill_dir / "skill.json"
+        if manifest.exists():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if data.get("name"):
+                    return data
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        skill_md = skill_dir / "SKILL.md"
+        if skill_md.exists():
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+                return _parse_skill_md_frontmatter(text)
+            except OSError:
+                pass
+        return None
 
     def import_skill_zip(self, zip_path: str | Path) -> dict[str, Any]:
         """Import a skill package ZIP and persist its metadata."""
@@ -184,3 +268,18 @@ class SkillService:
             preferred_model_name=dto.model_override or None,
             temperature_override=dto.temperature_override,
         )
+
+
+def _parse_skill_md_frontmatter(text: str) -> dict[str, str] | None:
+    """Extract name/description from YAML frontmatter in SKILL.md."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    meta: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" in line:
+            key, _, value = line.partition(":")
+            meta[key.strip()] = value.strip()
+    return meta if meta.get("name") else None

@@ -26,16 +26,14 @@ class AgentBuildError(ChatError):
     """Failed to construct the LangGraph agent."""
 
 
-# TODO: not yet used; reserved for future error handling.
 class AgentRunError(ChatError):
-    """Agent execution failed."""
+    """Agent execution failed during streaming."""
 
     def __init__(self, detail: str = "", *, recoverable: bool = True) -> None:
         self.recoverable = recoverable
         super().__init__(detail)
 
 
-# TODO: not yet used; reserved for future error handling.
 class ToolExecutionError(ChatError):
     """A tool call returned an error."""
 
@@ -50,6 +48,12 @@ class ToolExecutionError(ChatError):
         super().__init__(msg)
 
 
-# TODO: not yet used; reserved for future error handling.
 class PersistenceError(ChatError):
     """Database operation for chat data failed."""
+
+    def __init__(self, operation: str = "", detail: str = "") -> None:
+        self.operation = operation
+        msg = f"Chat persistence failed: {operation}" if operation else "Chat persistence failed"
+        if detail:
+            msg += f" — {detail}"
+        super().__init__(msg)

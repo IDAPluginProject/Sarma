@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QTimer
 
@@ -52,6 +54,8 @@ from app.ui.settings.workers import (
     _InstallController,
     _InstallationDisplay,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ===================================================================
@@ -179,6 +183,13 @@ class SettingsPage(QWidget):
         self._skills_layout.setSpacing(10)
         self._skills_layout.addStretch(1)
 
+        # --- Agents widgets ---
+        self._agents_container = QWidget()
+        self._agents_layout = QVBoxLayout(self._agents_container)
+        self._agents_layout.setContentsMargins(0, 0, 0, 0)
+        self._agents_layout.setSpacing(10)
+        self._agents_combos: dict[str, "QComboBox"] = {}
+
         self._wsl_toggle = QToolButton()
         self._wsl_toggle.setCheckable(True)
         self._wsl_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -244,6 +255,7 @@ class SettingsPage(QWidget):
             self._t("settings.category.model"),
             self._t("settings.category.mcp_settings"),
             self._t("settings.category.skills"),
+            self._t("settings.category.agents"),
         ):
             item = QListWidgetItem(name)
             font = item.font()
@@ -270,6 +282,7 @@ class SettingsPage(QWidget):
         self._stack.addWidget(self._build_model_page())
         self._stack.addWidget(self._build_mcp_settings_page())
         self._stack.addWidget(self._build_skills_page())
+        self._stack.addWidget(self._build_agents_page())
 
         if current_row < 0:
             current_row = 0
@@ -281,10 +294,31 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
+        # --- Global Settings ---
         layout.addWidget(
             self._build_config_group(
-                self._t("settings.group.global_paths"),
-                self._t("settings.group.global_paths.desc"),
+                self._t("settings.group.global"),
+                self._t("settings.group.global.desc"),
+                [
+                    self._build_field_row(
+                        self._t("settings.field.language"),
+                        self._t("settings.field.language.desc"),
+                        self._build_language_field(),
+                    ),
+                    self._build_field_row(
+                        self._t("settings.field.ide_request_timeout"),
+                        self._t("settings.field.ide_request_timeout.desc"),
+                        self._ide_request_timeout,
+                    ),
+                ],
+            )
+        )
+
+        # --- IDA-MCP Configuration (single card) ---
+        layout.addWidget(
+            self._build_config_group(
+                self._t("settings.group.ida_mcp_config"),
+                self._t("settings.group.ida_mcp_config.desc"),
                 [
                     self._build_field_row(
                         self._t("settings.field.ida_dir"),
@@ -301,32 +335,6 @@ class SettingsPage(QWidget):
                         self._t("settings.field.ida_mcp_config_path.desc"),
                         self._ida_mcp_config_path,
                     ),
-                ],
-            )
-        )
-        layout.addWidget(
-            self._build_config_group(
-                self._t("settings.group.runtime"),
-                self._t("settings.group.runtime.desc"),
-                [
-                    self._build_field_row(
-                        self._t("settings.field.language"),
-                        self._t("settings.field.language.desc"),
-                        self._build_language_field(),
-                    ),
-                    self._build_field_row(
-                        self._t("settings.field.ide_request_timeout"),
-                        self._t("settings.field.ide_request_timeout.desc"),
-                        self._ide_request_timeout,
-                    ),
-                ],
-            )
-        )
-        layout.addWidget(
-            self._build_config_group(
-                self._t("settings.group.transport"),
-                self._t("settings.group.transport.desc"),
-                [
                     self._build_checkbox_row(
                         self._enable_http,
                         self._t("settings.field.enable_http"),
@@ -367,14 +375,6 @@ class SettingsPage(QWidget):
                         self._t("settings.field.debug"),
                         self._t("settings.field.debug.desc"),
                     ),
-                ],
-            )
-        )
-        layout.addWidget(
-            self._build_config_group(
-                self._t("settings.group.execution"),
-                self._t("settings.group.execution.desc"),
-                [
                     self._build_field_row(
                         self._t("settings.field.ida_executable"),
                         self._t("settings.field.ida_executable.desc"),
@@ -415,13 +415,13 @@ class SettingsPage(QWidget):
                         self._t("settings.field.server_name.desc"),
                         self._server_name,
                     ),
+                    self._wsl_toggle,
+                    self._wsl_container,
                 ],
             )
         )
 
         self._refresh_wsl_section()
-        layout.addWidget(self._wsl_toggle)
-        layout.addWidget(self._wsl_container)
 
         layout.addStretch(1)
 
@@ -486,10 +486,11 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
+        # --- IDA-MCP Plugin Section ---
         layout.addWidget(
             self._build_config_group(
-                self._t("settings.install.inputs"),
-                self._t("settings.install.inputs.desc"),
+                self._t("settings.install.ida_mcp"),
+                self._t("settings.install.ida_mcp.desc"),
                 [
                     self._build_field_row(
                         self._t("settings.field.ida_python"),
@@ -504,28 +505,22 @@ class SettingsPage(QWidget):
                 ],
             )
         )
-        layout.addWidget(
-            self._build_config_group(
-                self._t("settings.install.requirements"),
-                self._t("settings.install.requirements.desc"),
-                [
-                    self._build_field_row(
-                        self._t("settings.install.requirements_path"),
-                        self._t("settings.install.requirements_path.desc"),
-                        self._requirements_path,
-                    ),
-                    self._requirements_table,
-                ],
-            )
-        )
-        layout.addWidget(
-            self._build_config_group(
-                self._t("settings.category.install"),
-                self._t("settings.install.placeholder"),
-                [self._install_notes],
-            )
-        )
 
+        ida_mcp_bar = QWidget()
+        ida_mcp_bar_layout = QHBoxLayout(ida_mcp_bar)
+        ida_mcp_bar_layout.setContentsMargins(0, 0, 0, 0)
+        ida_mcp_bar_layout.setSpacing(8)
+        check_button = QPushButton(self._t("settings.install.check"))
+        check_button.clicked.connect(self.check)
+        install_button = QPushButton(self._t("settings.install.install"))
+        install_button.setObjectName("primaryButton")
+        install_button.clicked.connect(self.reinstall)
+        ida_mcp_bar_layout.addStretch(1)
+        ida_mcp_bar_layout.addWidget(check_button)
+        ida_mcp_bar_layout.addWidget(install_button)
+        layout.addWidget(ida_mcp_bar)
+
+        # --- Diaphora Plugin Section ---
         layout.addWidget(
             self._build_config_group(
                 self._t("settings.diaphora.title"),
@@ -537,19 +532,77 @@ class SettingsPage(QWidget):
             )
         )
 
-        action_bar = QWidget()
-        action_bar_layout = QHBoxLayout(action_bar)
-        action_bar_layout.setContentsMargins(0, 0, 0, 0)
-        action_bar_layout.setSpacing(8)
-        check_button = QPushButton(self._t("settings.install.check"))
-        check_button.clicked.connect(self.check)
-        install_button = QPushButton(self._t("settings.install.install"))
-        install_button.setObjectName("primaryButton")
-        install_button.clicked.connect(self.reinstall)
-        action_bar_layout.addStretch(1)
-        action_bar_layout.addWidget(check_button)
-        action_bar_layout.addWidget(install_button)
-        layout.addWidget(action_bar)
+        diaphora_bar = QWidget()
+        diaphora_bar_layout = QHBoxLayout(diaphora_bar)
+        diaphora_bar_layout.setContentsMargins(0, 0, 0, 0)
+        diaphora_bar_layout.setSpacing(8)
+        diaphora_bar_layout.addStretch(1)
+        diaphora_check = QPushButton(self._t("settings.install.check"))
+        diaphora_check.clicked.connect(self._check_diaphora)
+        diaphora_install = QPushButton(self._t("settings.install.install"))
+        diaphora_install.setObjectName("primaryButton")
+        diaphora_install.clicked.connect(self._install_diaphora)
+        diaphora_bar_layout.addWidget(diaphora_check)
+        diaphora_bar_layout.addWidget(diaphora_install)
+        layout.addWidget(diaphora_bar)
+
+        # --- Requirements (editable) ---
+        req_bar = QWidget()
+        req_bar_layout = QHBoxLayout(req_bar)
+        req_bar_layout.setContentsMargins(0, 0, 0, 0)
+        req_bar_layout.setSpacing(8)
+        self._req_add_input = QLineEdit()
+        self._req_add_input.setPlaceholderText("package-name")
+        self._req_add_input.setMinimumWidth(160)
+        add_req_btn = QPushButton(self._t("settings.install.req_add"))
+        add_req_btn.clicked.connect(self._add_requirement)
+        remove_req_btn = QPushButton(self._t("settings.install.req_remove"))
+        remove_req_btn.clicked.connect(self._remove_requirement)
+        install_req_btn = QPushButton(self._t("settings.install.req_install_all"))
+        install_req_btn.setObjectName("primaryButton")
+        install_req_btn.clicked.connect(self._install_all_requirements)
+        req_bar_layout.addWidget(self._req_add_input)
+        req_bar_layout.addWidget(add_req_btn)
+        req_bar_layout.addWidget(remove_req_btn)
+        req_bar_layout.addStretch(1)
+        req_bar_layout.addWidget(install_req_btn)
+
+        layout.addWidget(
+            self._build_config_group(
+                self._t("settings.install.requirements"),
+                self._t("settings.install.requirements.desc"),
+                [
+                    self._build_field_row(
+                        self._t("settings.install.requirements_path"),
+                        self._t("settings.install.requirements_path.desc"),
+                        self._requirements_path,
+                    ),
+                    self._requirements_table,
+                    req_bar,
+                ],
+            )
+        )
+
+        # --- Install Log (bottom) ---
+        layout.addWidget(
+            self._build_config_group(
+                self._t("settings.install.log"),
+                self._t("settings.install.log.desc"),
+                [self._install_notes],
+            )
+        )
+
+        # --- Install All (bottom bar) ---
+        bottom_bar = QWidget()
+        bottom_bar_layout = QHBoxLayout(bottom_bar)
+        bottom_bar_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_bar_layout.setSpacing(8)
+        bottom_bar_layout.addStretch(1)
+        install_all_btn = QPushButton(self._t("settings.install.install_all"))
+        install_all_btn.setObjectName("primaryButton")
+        install_all_btn.clicked.connect(self._install_all)
+        bottom_bar_layout.addWidget(install_all_btn)
+        layout.addWidget(bottom_bar)
 
         layout.addStretch(1)
         return self._wrap_scroll(widget)
@@ -1478,6 +1531,65 @@ class SettingsPage(QWidget):
             button.setEnabled(enabled)
 
     # ------------------------------------------------------------------
+    # Requirements management
+    # ------------------------------------------------------------------
+
+    def _add_requirement(self) -> None:
+        pkg = self._req_add_input.text().strip()
+        if not pkg:
+            return
+        req_path = self._requirements_path.text().strip()
+        if not req_path:
+            return
+        try:
+            path = Path(req_path)
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+            lines = [l.strip() for l in existing.splitlines() if l.strip()]
+            if pkg not in lines:
+                lines.append(pkg)
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self._req_add_input.clear()
+            self.check()
+        except Exception as exc:
+            logger.warning("Failed to add requirement: %s", exc)
+
+    def _remove_requirement(self) -> None:
+        pkg = self._req_add_input.text().strip()
+        if not pkg:
+            return
+        req_path = self._requirements_path.text().strip()
+        if not req_path:
+            return
+        try:
+            path = Path(req_path)
+            if not path.exists():
+                return
+            lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            lines = [l for l in lines if l != pkg]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self._req_add_input.clear()
+            self.check()
+        except Exception as exc:
+            logger.warning("Failed to remove requirement: %s", exc)
+
+    def _install_all_requirements(self) -> None:
+        """pip install -r requirements.txt using IDA Python."""
+        try:
+            result = self._settings_service.install_requirements()
+            self._install_notes.setPlainText(result.summary)
+            if result.warnings:
+                self._install_notes.appendPlainText("\n".join(result.warnings))
+            self.check()
+        except Exception as exc:
+            self._install_notes.setPlainText(f"Error: {exc}")
+
+    def _install_all(self) -> None:
+        """Run full installation: IDA-MCP + Diaphora + Requirements."""
+        self._install_notes.setPlainText("Installing all...")
+        self.reinstall()
+        self._install_all_requirements()
+
+    # ------------------------------------------------------------------
     # Diaphora install
     # ------------------------------------------------------------------
 
@@ -1510,6 +1622,32 @@ class SettingsPage(QWidget):
 
         self._diaphora_status.setText(status_text)
         self._diaphora_details.setText("\n".join(parts))
+
+    def _check_diaphora(self) -> None:
+        self._refresh_diaphora_status()
+
+    def _install_diaphora(self) -> None:
+        try:
+            result = self._settings_service.install_diaphora()
+            self._refresh_diaphora_status()
+            if result.ok:
+                QMessageBox.information(
+                    self,
+                    self._t("settings.dialog.settings"),
+                    result.summary,
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    self._t("settings.dialog.settings"),
+                    result.summary,
+                )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self._t("settings.dialog.settings"),
+                str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Reusable widget builders
@@ -1782,3 +1920,124 @@ class SettingsPage(QWidget):
             ],
         )
         self._wsl_layout.addWidget(self._wsl_group)
+
+    # ------------------------------------------------------------------
+    # Agents page
+    # ------------------------------------------------------------------
+
+    _AGENT_NAMES = [
+        "orchestrator", "recon", "hunt", "validate",
+        "gapfill", "dedupe", "trace", "feedback", "report",
+    ]
+
+    _AGENT_DESCRIPTIONS = {
+        "orchestrator": "Pipeline coordinator — dispatches and sequences all stages",
+        "recon": "Survey binary metadata, segments, imports, exports, strings",
+        "hunt": "Pattern-match for dangerous sinks and vulnerability candidates",
+        "validate": "Confirm candidates are real bugs (reachable, not sanitized)",
+        "gapfill": "Identify coverage gaps, request deeper analysis",
+        "dedupe": "Merge duplicates, cluster by root cause",
+        "trace": "Data-flow from entries to sinks, build exploitation paths",
+        "feedback": "Quality gate — send weak findings back for rework",
+        "report": "Synthesize final vulnerability report + PoC + remediation",
+    }
+
+    def _build_agents_page(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        layout.addWidget(
+            self._build_config_group(
+                self._t("settings.group.audit_agents"),
+                self._t("settings.group.audit_agents.desc"),
+                [self._agents_container],
+            )
+        )
+
+        layout.addStretch(1)
+        self._refresh_agents()
+        return self._wrap_scroll(widget)
+
+    def _refresh_agents(self) -> None:
+        while self._agents_layout.count():
+            item = self._agents_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self._agents_combos.clear()
+
+        providers = self._settings_service.get_model_providers()
+        assignments = self._settings_service.get_agent_model_assignments()
+        assignment_map = {a.agent_name: a.provider_id for a in assignments}
+
+        for agent_name in self._AGENT_NAMES:
+            card = self._build_agent_card(
+                agent_name, assignment_map.get(agent_name), providers
+            )
+            self._agents_layout.addWidget(card)
+
+    def _build_agent_card(
+        self,
+        agent_name: str,
+        current_provider_id: int | None,
+        providers: list,
+    ) -> QWidget:
+        from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout
+
+        card = QFrame()
+        card.setObjectName("settingsGroup")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        title = QLabel(agent_name.capitalize())
+        title.setObjectName("settingsGroupTitle")
+        layout.addWidget(title)
+
+        desc_text = self._AGENT_DESCRIPTIONS.get(agent_name, "")
+        desc = QLabel(desc_text)
+        desc.setObjectName("settingsFieldDescription")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 4, 0, 0)
+        row_layout.setSpacing(8)
+
+        label = QLabel(self._t("settings.agents.model_label"))
+        row_layout.addWidget(label)
+
+        combo = QComboBox()
+        combo.setMinimumWidth(220)
+        default_text = self._t("settings.agents.use_default")
+        combo.addItem(default_text, None)
+        selected_idx = 0
+        for i, p in enumerate(providers):
+            if not p.enabled:
+                continue
+            display = f"{p.name} ({p.model_name})" if p.name else p.model_name
+            combo.addItem(display, p.id)
+            if p.id == current_provider_id:
+                selected_idx = combo.count() - 1
+        combo.setCurrentIndex(selected_idx)
+        combo.currentIndexChanged.connect(
+            lambda _idx, name=agent_name, cb=combo: self._on_agent_model_changed(name, cb)
+        )
+        row_layout.addWidget(combo, 1)
+        layout.addWidget(row)
+
+        self._agents_combos[agent_name] = combo
+        return card
+
+    def _on_agent_model_changed(self, agent_name: str, combo) -> None:
+        provider_id = combo.currentData()
+        try:
+            self._settings_service.update_agent_model_assignment(
+                agent_name, provider_id
+            )
+        except Exception as exc:
+            logger.warning("Failed to save agent model: %s", exc)

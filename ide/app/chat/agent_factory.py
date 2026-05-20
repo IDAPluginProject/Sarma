@@ -257,36 +257,53 @@ class AgentFactory:
                 f"Failed to initialize model: {exc}"
             ) from exc
 
-        # 5. Build deepagents agent with orchestrator prompt + subagents
+        # 5. Build agent — use audit pipeline only when skill requests it,
+        #    otherwise build a simple ReAct agent.
         try:
-            from deepagents import create_deep_agent
-            from app.chat.audit_subagents import (
-                build_runtime_subagents,
-                get_orchestrator_prompt,
+            use_audit_pipeline = (
+                config.skill is not None
+                and config.skill.name
+                and "audit" in config.skill.name.lower()
             )
 
-            # Use the vulnerability-discovery orchestrator prompt.
-            # If the user/skill provided a custom system_prompt, prepend it.
-            orch_prompt = get_orchestrator_prompt()
-            if config.system_prompt:
-                system_prompt = config.system_prompt + "\n\n" + orch_prompt
-            else:
-                system_prompt = orch_prompt
-
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "tools": tools,
-                "system_prompt": system_prompt,
-                # 8-stage vulnerability discovery pipeline.
-                "subagents": build_runtime_subagents(tools),
-            }
-            if self._workspace_path:
-                from deepagents.backends import LocalShellBackend
-
-                kwargs["backend"] = LocalShellBackend(
-                    root_dir=self._workspace_path
+            if use_audit_pipeline:
+                from deepagents import create_deep_agent
+                from app.chat.audit_subagents import (
+                    build_runtime_subagents,
+                    get_orchestrator_prompt,
                 )
-            agent = create_deep_agent(**kwargs)
+
+                orch_prompt = get_orchestrator_prompt()
+                if config.system_prompt:
+                    system_prompt = config.system_prompt + "\n\n" + orch_prompt
+                else:
+                    system_prompt = orch_prompt
+
+                subagent_models = self._load_subagent_models(provider)
+                orch_model = subagent_models.pop("orchestrator", None) or model
+
+                kwargs: dict[str, Any] = {
+                    "model": orch_model,
+                    "tools": tools,
+                    "system_prompt": system_prompt,
+                    "subagents": build_runtime_subagents(
+                        tools, subagent_models=subagent_models or None
+                    ),
+                }
+                if self._workspace_path:
+                    from deepagents.backends import LocalShellBackend
+
+                    kwargs["backend"] = LocalShellBackend(
+                        root_dir=self._workspace_path
+                    )
+                agent = create_deep_agent(**kwargs)
+            else:
+                from langgraph.prebuilt import create_react_agent
+
+                system_prompt = config.system_prompt or ""
+                agent = create_react_agent(
+                    model, tools, prompt=system_prompt
+                )
         except Exception as exc:
             raise AgentBuildError(
                 f"Failed to create agent: {exc}"
@@ -341,3 +358,47 @@ class AgentFactory:
             allowlist=skill.tool_allowlist,
             denylist=skill.tool_denylist,
         )
+
+    def _load_subagent_models(self, default_provider: Any) -> dict[str, Any]:
+        """Load per-agent model assignments from the database.
+
+        Returns a dict mapping agent_name → initialized BaseChatModel.
+        Only agents with a non-null provider_id are included.
+        """
+        try:
+            from shared.database import DatabaseStore
+            from shared.paths import get_ide_user_config_root
+
+            db = DatabaseStore()
+            rows = db.load_rows("audit_agent_models")
+            if not rows:
+                return {}
+
+            providers_by_id: dict[int, dict] = {}
+            for p in db.load_rows("model_providers"):
+                providers_by_id[p["id"]] = p
+
+            models: dict[str, Any] = {}
+            for row in rows:
+                pid = row.get("provider_id")
+                if not pid:
+                    continue
+                provider_row = providers_by_id.get(pid)
+                if not provider_row:
+                    continue
+                agent_name = row.get("agent_name", "")
+                api_mode = provider_row.get("api_mode", "openai_compatible")
+                builder = _MODEL_BUILDERS.get(api_mode)
+                if not builder:
+                    continue
+                models[agent_name] = builder(
+                    model_name=provider_row.get("model_name", ""),
+                    api_key=provider_row.get("api_key", ""),
+                    base_url=provider_row.get("base_url", ""),
+                    temperature=float(provider_row.get("temperature", 0.7)),
+                    top_p=float(provider_row.get("top_p", 1.0)),
+                )
+            return models
+        except Exception as exc:
+            logger.warning("Failed to load subagent models: %s", exc)
+            return {}

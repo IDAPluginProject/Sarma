@@ -95,3 +95,36 @@ def apply_migrations(conn: sqlite3.Connection, current: int, target: int) -> Non
                 last_opened_at TEXT    NOT NULL DEFAULT ''
             )
         """)
+
+    if current < 9:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conv_messages_conversation_id
+            ON conversation_messages (conversation_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conv_messages_turn_id
+            ON conversation_messages (turn_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conv_messages_created_at
+            ON conversation_messages (created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tool_executions_conversation_id
+            ON tool_executions (conversation_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
+            ON conversations (updated_at)
+        """)
+
+    if current < 10:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_agent_models (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name  TEXT    NOT NULL UNIQUE,
+                provider_id INTEGER,
+                created_at  TEXT    NOT NULL DEFAULT '',
+                updated_at  TEXT    NOT NULL DEFAULT ''
+            )
+        """)

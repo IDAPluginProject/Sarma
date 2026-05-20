@@ -137,3 +137,23 @@ class SkillDTO:
             "model_override": self.model_override,
             "temperature_override": self.temperature_override,
         }
+
+
+@dataclass
+class AgentModelAssignmentDTO:
+    id: int | None
+    agent_name: str
+    provider_id: int | None
+    provider_name: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "agent_name": self.agent_name,
+            "provider_id": self.provider_id,
+            "provider_name": self.provider_name,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

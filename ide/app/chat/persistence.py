@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from shared.database import DatabaseStore
 
+from .errors import PersistenceError
 from .models import (
     ChatMessage,
     Conversation,
     ConversationMcpBinding,
     ToolExecution,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _VALID_CONVERSATION_COLUMNS = {
@@ -58,18 +62,22 @@ class ChatPersistence:
     # ------------------------------------------------------------------
 
     def create_conversation(self, conv: Conversation) -> str:
-        self._db.insert_row(
-            "conversations",
-            id=conv.id,
-            title=conv.title,
-            provider_id=conv.provider_id,
-            model_name_snapshot=conv.model_name_snapshot,
-            skill_id=conv.skill_id,
-            system_prompt_override=conv.system_prompt_override or "",
-            status=conv.status,
-            created_at=conv.created_at,
-            updated_at=conv.updated_at,
-        )
+        try:
+            self._db.insert_row(
+                "conversations",
+                id=conv.id,
+                title=conv.title,
+                provider_id=conv.provider_id,
+                model_name_snapshot=conv.model_name_snapshot,
+                skill_id=conv.skill_id,
+                system_prompt_override=conv.system_prompt_override or "",
+                status=conv.status,
+                created_at=conv.created_at,
+                updated_at=conv.updated_at,
+            )
+        except Exception as exc:
+            logger.error("Failed to create conversation %s: %s", conv.id, exc)
+            raise PersistenceError("create_conversation", str(exc)) from exc
         return conv.id
 
     def get_conversation(self, conv_id: str) -> Conversation | None:
@@ -135,19 +143,23 @@ class ChatPersistence:
     # ------------------------------------------------------------------
 
     def save_message(self, msg: ChatMessage) -> str:
-        self._db.insert_row(
-            "conversation_messages",
-            id=msg.id,
-            conversation_id=msg.conversation_id,
-            turn_id=msg.turn_id,
-            role=msg.role,
-            content=msg.content,
-            tool_name=msg.tool_name or "",
-            tool_call_id=msg.tool_call_id or "",
-            metadata_json=msg.metadata_json or "",
-            reasoning_content=msg.reasoning_content or "",
-            created_at=msg.created_at,
-        )
+        try:
+            self._db.insert_row(
+                "conversation_messages",
+                id=msg.id,
+                conversation_id=msg.conversation_id,
+                turn_id=msg.turn_id,
+                role=msg.role,
+                content=msg.content,
+                tool_name=msg.tool_name or "",
+                tool_call_id=msg.tool_call_id or "",
+                metadata_json=msg.metadata_json or "",
+                reasoning_content=msg.reasoning_content or "",
+                created_at=msg.created_at,
+            )
+        except Exception as exc:
+            logger.error("Failed to save message %s: %s", msg.id, exc)
+            raise PersistenceError("save_message", str(exc)) from exc
         return msg.id
 
     def save_messages(self, messages: list[ChatMessage]) -> None:
@@ -219,21 +231,25 @@ class ChatPersistence:
     # ------------------------------------------------------------------
 
     def save_tool_execution(self, trace: ToolExecution) -> str:
-        self._db.insert_row(
-            "tool_executions",
-            id=trace.id,
-            conversation_id=trace.conversation_id,
-            turn_id=trace.turn_id,
-            mcp_server_id=trace.mcp_server_id or 0,
-            server_name=trace.server_name,
-            tool_name=trace.tool_name,
-            args_json=trace.args_json,
-            result_summary=trace.result_summary or "",
-            status=trace.status,
-            error_text=trace.error_text or "",
-            started_at=trace.started_at,
-            finished_at=trace.finished_at or "",
-        )
+        try:
+            self._db.insert_row(
+                "tool_executions",
+                id=trace.id,
+                conversation_id=trace.conversation_id,
+                turn_id=trace.turn_id,
+                mcp_server_id=trace.mcp_server_id or 0,
+                server_name=trace.server_name,
+                tool_name=trace.tool_name,
+                args_json=trace.args_json,
+                result_summary=trace.result_summary or "",
+                status=trace.status,
+                error_text=trace.error_text or "",
+                started_at=trace.started_at,
+                finished_at=trace.finished_at or "",
+            )
+        except Exception as exc:
+            logger.error("Failed to save tool execution %s: %s", trace.id, exc)
+            raise PersistenceError("save_tool_execution", str(exc)) from exc
         return trace.id
 
     def update_tool_execution(self, trace_id: str, **updates: Any) -> bool:
