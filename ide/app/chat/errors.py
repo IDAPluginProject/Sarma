@@ -34,20 +34,6 @@ class AgentRunError(ChatError):
         super().__init__(detail)
 
 
-class ToolExecutionError(ChatError):
-    """A tool call returned an error."""
-
-    def __init__(
-        self, tool_name: str, server_name: str, detail: str = ""
-    ) -> None:
-        self.tool_name = tool_name
-        self.server_name = server_name
-        msg = f"Tool {tool_name!r} on {server_name!r} failed"
-        if detail:
-            msg += f": {detail}"
-        super().__init__(msg)
-
-
 class PersistenceError(ChatError):
     """Database operation for chat data failed."""
 

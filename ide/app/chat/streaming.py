@@ -1,10 +1,10 @@
 """LangGraph event stream → StreamEvent normalization.
 
-This module bridges deepagents v0.6+ subgraph streaming output to the
-internal ``StreamEvent`` schema consumed by the UI layer.
+This module bridges LangGraph subgraph streaming output to the internal
+``StreamEvent`` schema consumed by the UI layer.
 
-Subgraph streaming format (deepagents v0.6, ``version="v2"``)
-=============================================================
+Subgraph streaming format (LangGraph v1.1+, ``version="v2"``)
+==============================================================
 
 Each chunk from ``agent.astream(..., subgraphs=True, version="v2")`` is a
 dict:
@@ -15,9 +15,9 @@ dict:
         "data": <mode-specific payload>,
     }
 
-* ``ns`` is the agent hierarchy path. ``()`` = main agent. A segment of
-  the form ``"tools:<tool_call_id>"`` denotes a subagent dispatched
-  through the built-in ``task`` tool with that tool_call_id.
+* ``ns`` is the agent hierarchy path. ``()`` = top-level graph. For the
+  audit pipeline, the first segment is the subagent node name (e.g.
+  ``("recon",)`` or ``("recon", "agent")``).
 * ``type="messages"`` → ``data`` is ``(message_chunk, metadata)`` —
   individual LLM tokens.
 * ``type="updates"`` → ``data`` is a node-name → state-delta dict.
@@ -25,10 +25,9 @@ dict:
 
 The translator below carries a stateful ``EventTranslator`` that:
 
-1. Remembers ``tool_call_id → subagent_name`` for every ``task`` call
-   that originates from the main agent.
-2. Resolves any ``ns`` containing ``"tools:<id>"`` to the matching
-   subagent name (defaulting to ``"orchestrator"`` for the empty ``ns``).
+1. Resolves ``ns`` tuples to subagent names by matching the first segment
+   against known audit pipeline node names.
+2. Falls back to tool_call_id mapping for legacy compatibility.
 3. Emits :class:`StreamEvent` instances with a stable ``subagent`` field
    on every payload, so the UI can route tokens / tool calls to the
    correct role card without guessing.
@@ -40,6 +39,7 @@ import time
 from typing import Any
 
 from app.chat.models import StreamEvent
+from shared.enums import StreamEventType
 
 # Maximum characters retained from a tool result in streaming events.
 MAX_TOOL_RESULT_CHARS = 2000
@@ -47,8 +47,18 @@ MAX_TOOL_RESULT_CHARS = 2000
 # Conventional name for the top-level coordinator agent.
 ORCHESTRATOR = "orchestrator"
 
-# Namespace segment prefix that deepagents uses for delegated subagents.
-_SUBAGENT_NS_PREFIX = "tools:"
+# Known subagent node names (from audit pipeline).
+_KNOWN_SUBAGENTS: set[str] = set()
+
+def _init_known_subagents() -> None:
+    """Lazily populate known subagent names from audit_subagents."""
+    global _KNOWN_SUBAGENTS
+    if not _KNOWN_SUBAGENTS:
+        try:
+            from app.chat.audit_subagents import AUDIT_SUBAGENT_ORDER
+            _KNOWN_SUBAGENTS = set(AUDIT_SUBAGENT_ORDER)
+        except ImportError:
+            pass
 
 
 def _resolve_subagent_from_ns(
@@ -57,28 +67,35 @@ def _resolve_subagent_from_ns(
 ) -> str:
     """Return the subagent name responsible for a given namespace tuple.
 
-    Falls back to ``ORCHESTRATOR`` for empty namespaces or unknown call
-    IDs (which can happen for the first chunk before the corresponding
-    ``task`` tool_start event has been observed — rare, but defensive).
+    Handles native LangGraph ns format where the first segment is the
+    node name (e.g. ("recon",) or ("recon", "agent")).
+    Also handles legacy "tools:<call_id>" format for backwards compat.
     """
     if not ns:
         return ORCHESTRATOR
+    _init_known_subagents()
+    first = ns[0] if ns else ""
+    if isinstance(first, str) and first in _KNOWN_SUBAGENTS:
+        return first
+    # Fallback: check tool_call_id mapping (handles "tools:<id>" segments)
     for seg in ns:
-        if not isinstance(seg, str) or not seg.startswith(_SUBAGENT_NS_PREFIX):
+        if not isinstance(seg, str):
             continue
-        call_id = seg[len(_SUBAGENT_NS_PREFIX):]
-        name = tool_call_to_subagent.get(call_id)
+        # Try direct lookup
+        name = tool_call_to_subagent.get(seg)
         if name:
             return name
-        # Namespace identifies *some* subagent but we don't know which
-        # one yet; surface the raw segment so the UI can still group
-        # related events together.
-        return seg
+        # Try stripping "tools:" prefix
+        if seg.startswith("tools:"):
+            call_id = seg[len("tools:"):]
+            name = tool_call_to_subagent.get(call_id)
+            if name:
+                return name
     return ORCHESTRATOR
 
 
 class EventTranslator:
-    """Stateful translator from deepagents subgraph events → StreamEvents.
+    """Stateful translator from LangGraph subgraph events → StreamEvents.
 
     One instance per agent turn. Holds the ``tool_call_id → subagent_name``
     mapping that is populated as ``task`` calls are observed.
@@ -98,7 +115,7 @@ class EventTranslator:
 
         Accepts both the v0.6 wrapped-dict format and the legacy
         ``(mode, data)`` / ``(ns, mode, data)`` tuple shapes for
-        defensive compatibility while the deepagents API stabilises.
+        defensive compatibility while the LangGraph streaming API evolves.
         """
         event_type, ns, data = _unpack_chunk(chunk)
         if event_type is None:
@@ -146,7 +163,7 @@ class EventTranslator:
             return None
 
         return StreamEvent(
-            type="token",
+            type=StreamEventType.TOKEN,
             conversation_id=self._conv,
             turn_id=self._turn,
             payload={
@@ -203,7 +220,7 @@ class EventTranslator:
                 tool_call_id = tc.get("id", "")
 
                 events.append(StreamEvent(
-                    type="tool_start",
+                    type=StreamEventType.TOOL_START,
                     conversation_id=self._conv,
                     turn_id=self._turn,
                     payload={
@@ -219,7 +236,7 @@ class EventTranslator:
                 skill_name = _detect_skill_from_tool(tool_name, tool_args)
                 if skill_name:
                     events.append(StreamEvent(
-                        type="skill_triggered",
+                        type=StreamEventType.SKILL_TRIGGERED,
                         conversation_id=self._conv,
                         turn_id=self._turn,
                         payload={
@@ -240,7 +257,7 @@ class EventTranslator:
                         )
                     if subagent_type:
                         events.append(StreamEvent(
-                            type="subagent_start",
+                            type=StreamEventType.SUBAGENT_START,
                             conversation_id=self._conv,
                             turn_id=self._turn,
                             payload={
@@ -276,7 +293,7 @@ class EventTranslator:
             # update; for a task-tool completion, that's the orchestrator
             # — not the subagent that just finished.
             events.append(StreamEvent(
-                type="tool_error" if is_error else "tool_result",
+                type=StreamEventType.TOOL_ERROR if is_error else StreamEventType.TOOL_RESULT,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -295,7 +312,7 @@ class EventTranslator:
                 )
                 events.append(StreamEvent(
                     type=(
-                        "subagent_error" if is_error else "subagent_complete"
+                        StreamEventType.SUBAGENT_ERROR if is_error else StreamEventType.SUBAGENT_COMPLETE
                     ),
                     conversation_id=self._conv,
                     turn_id=self._turn,
@@ -318,7 +335,7 @@ class EventTranslator:
     ) -> list[StreamEvent]:
         """Handle custom stream events.
 
-        deepagents SkillsMiddleware emits custom events when skills are
+        LangGraph custom events can signal skill triggers when skills are
         matched/loaded.  Expected shapes:
           {"type": "skill_matched", "skill": "<name>", ...}
           {"type": "skill_loaded", "skill": "<name>", ...}
@@ -335,7 +352,7 @@ class EventTranslator:
 
         if event_subtype in ("skill_matched", "skill_loaded") and skill_name:
             return [StreamEvent(
-                type="skill_triggered",
+                type=StreamEventType.SKILL_TRIGGERED,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -350,7 +367,7 @@ class EventTranslator:
         # Shape 2: {"skill": "...", "status": "loaded"|"matched"}
         if skill_name and data.get("status") in ("loaded", "matched"):
             return [StreamEvent(
-                type="skill_triggered",
+                type=StreamEventType.SKILL_TRIGGERED,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -365,7 +382,7 @@ class EventTranslator:
         # Shape 3: generic progress/status from get_stream_writer()
         if "progress" in data or "status" in data:
             return [StreamEvent(
-                type="custom_progress",
+                type=StreamEventType.CUSTOM_PROGRESS,
                 conversation_id=self._conv,
                 turn_id=self._turn,
                 payload={
@@ -408,7 +425,7 @@ def _unpack_chunk(
     """Return ``(event_type, ns, data)`` for any supported chunk shape.
 
     Supported shapes:
-      * dict (deepagents v0.6+): ``{"type": ..., "ns": (...), "data": ...}``
+      * dict (LangGraph v2): ``{"type": ..., "ns": (...), "data": ...}``
       * 3-tuple (raw LangGraph w/ subgraphs): ``(ns, mode, data)``
       * 2-tuple (raw LangGraph w/o subgraphs): ``(mode, data)``  → ns=()
     """
@@ -452,7 +469,7 @@ def make_run_started_event(
     conversation_id: str, turn_id: str
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_started",
+        type=StreamEventType.RUN_STARTED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={},
@@ -466,7 +483,7 @@ def make_run_completed_event(
     assistant_content: str = "",
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_completed",
+        type=StreamEventType.RUN_COMPLETED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={"assistant_message": assistant_content},
@@ -481,7 +498,7 @@ def make_run_failed_event(
     partial_content: str = "",
 ) -> StreamEvent:
     return StreamEvent(
-        type="run_failed",
+        type=StreamEventType.RUN_FAILED,
         conversation_id=conversation_id,
         turn_id=turn_id,
         payload={"error": error, "partial_message": partial_content},

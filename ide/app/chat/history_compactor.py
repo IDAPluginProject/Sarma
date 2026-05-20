@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.chat.models import ChatMessage
 from app.chat.persistence import ChatPersistence
+
+logger = logging.getLogger(__name__)
 
 
 class HistoryCompactor:
@@ -54,6 +58,11 @@ class HistoryCompactor:
             return kept
 
         if not kept:
+            logger.warning(
+                "History compaction dropped all %d messages "
+                "(budget=%d tokens). Agent will run with no context.",
+                len(messages), budget,
+            )
             return []
 
         return [

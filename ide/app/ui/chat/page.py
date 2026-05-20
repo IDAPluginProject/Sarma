@@ -50,6 +50,7 @@ from app.ui.chat.role_panel import RolePanel
 from app.services.supervisor_client import SupervisorClient
 from app.ui.chat.session_sidebar import SessionSidebar
 from app.ui.chat.workflow_view import WorkflowDagView, _ActivityList
+from shared.enums import StreamEventType
 
 if TYPE_CHECKING:
     from app.i18n import I18n
@@ -294,27 +295,27 @@ class ChatPage(QWidget):
         self._workflow_view.handle_event(event_dict)
 
         # ---- event dispatch ----
-        if event_type == "run_started":
+        if event_type == StreamEventType.RUN_STARTED:
             self._on_run_started()
-        elif event_type == "token":
+        elif event_type == StreamEventType.TOKEN:
             self._on_token(payload)
-        elif event_type == "tool_start":
+        elif event_type == StreamEventType.TOOL_START:
             self._on_tool_start(payload)
-        elif event_type == "tool_result":
+        elif event_type == StreamEventType.TOOL_RESULT:
             self._on_tool_result(payload)
-        elif event_type == "tool_error":
+        elif event_type == StreamEventType.TOOL_ERROR:
             self._on_tool_error(payload)
-        elif event_type == "subagent_start":
+        elif event_type == StreamEventType.SUBAGENT_START:
             self._on_subagent_start(payload)
-        elif event_type == "subagent_complete":
+        elif event_type == StreamEventType.SUBAGENT_COMPLETE:
             self._on_subagent_finish(payload, failed=False)
-        elif event_type == "subagent_error":
+        elif event_type == StreamEventType.SUBAGENT_ERROR:
             self._on_subagent_finish(payload, failed=True)
-        elif event_type == "skill_triggered":
+        elif event_type == StreamEventType.SKILL_TRIGGERED:
             pass  # handled by workflow_view.handle_event above
-        elif event_type == "run_completed":
+        elif event_type == StreamEventType.RUN_COMPLETED:
             self._on_run_completed(payload)
-        elif event_type == "run_failed":
+        elif event_type == StreamEventType.RUN_FAILED:
             self._on_run_failed(payload)
 
     # ------------------------------------------------------------------
