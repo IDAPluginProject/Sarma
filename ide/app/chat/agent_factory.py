@@ -201,7 +201,7 @@ _MODEL_BUILDERS: dict[str, Any] = {
 
 
 class AgentFactory:
-    """Builds a deepagents agent from runtime configuration."""
+    """Builds a LangGraph agent from runtime configuration."""
 
     def __init__(
         self, pool: McpClientPool, workspace_path: str = ""
@@ -218,7 +218,7 @@ class AgentFactory:
             config: Full run configuration.
 
         Returns:
-            Tuple of (compiled deepagents agent, list of LangChain tools).
+            Tuple of (compiled LangGraph agent, list of LangChain tools).
 
         Raises:
             ProviderNotConfiguredError: If the provider is invalid.
@@ -267,36 +267,19 @@ class AgentFactory:
             )
 
             if use_audit_pipeline:
-                from deepagents import create_deep_agent
-                from app.chat.audit_subagents import (
-                    build_runtime_subagents,
-                    get_orchestrator_prompt,
-                )
-
-                orch_prompt = get_orchestrator_prompt()
-                if config.system_prompt:
-                    system_prompt = config.system_prompt + "\n\n" + orch_prompt
-                else:
-                    system_prompt = orch_prompt
+                from app.chat.audit_graph import build_audit_graph
+                from app.chat.audit_subagents import AUDIT_SUBAGENTS
 
                 subagent_models = self._load_subagent_models(provider)
-                orch_model = subagent_models.pop("orchestrator", None) or model
+                subagent_models.pop("orchestrator", None)
 
-                kwargs: dict[str, Any] = {
-                    "model": orch_model,
-                    "tools": tools,
-                    "system_prompt": system_prompt,
-                    "subagents": build_runtime_subagents(
-                        tools, subagent_models=subagent_models or None
-                    ),
-                }
-                if self._workspace_path:
-                    from deepagents.backends import LocalShellBackend
-
-                    kwargs["backend"] = LocalShellBackend(
-                        root_dir=self._workspace_path
-                    )
-                agent = create_deep_agent(**kwargs)
+                agent = build_audit_graph(
+                    model=model,
+                    tools=tools,
+                    system_prompt=config.system_prompt or "",
+                    subagent_specs=AUDIT_SUBAGENTS,
+                    subagent_models=subagent_models or None,
+                )
             else:
                 from langgraph.prebuilt import create_react_agent
 

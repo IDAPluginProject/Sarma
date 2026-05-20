@@ -1,6 +1,6 @@
 """Agent construction and streaming execution for chat turns.
 
-For audit-mode runs, uses deepagents v0.6+ subgraph streaming
+For audit-mode runs, uses LangGraph subgraph streaming
 (``subgraphs=True, version="v2"``) so that every token / tool call /
 result is attributable to either the orchestrator or a named subagent.
 The :class:`EventTranslator` resolves namespace tuples into subagent
