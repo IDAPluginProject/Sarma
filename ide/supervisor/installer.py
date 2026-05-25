@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared.paths import get_ida_mcp_resources_dir, get_soff_resources_dir
+from shared.paths import get_ida_mcp_resources_dir, get_resources_root, get_soff_resources_dir
 
 from .models import (
     EnvironmentProbe,
@@ -139,7 +139,7 @@ def _resolve_requirements_path(repo_root: Path) -> Path:
 
 class EnvironmentInstaller:
     def __init__(self, repo_root: Path | None = None) -> None:
-        self._repo_root = repo_root or get_ida_mcp_resources_dir()
+        self._repo_root = repo_root or get_resources_root()
         self._detector = PlatformDetector()
 
     def probe(self, plugin_dir: str | None = None) -> EnvironmentProbe:

@@ -1,0 +1,16 @@
+fastmcp
+pytest
+PySide6
+PyQt6-sip
+Requests
+rpyc
+tomli
+six
+keystone-engine
+colorama
+yara-python
+cdifflib
+scikit-learn
+numpy
+joblib
+pandas
