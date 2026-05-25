@@ -11,10 +11,8 @@ from shared.models import IdaMcpConfig
 from .config_store import IdeConfigStore
 from .gateway_controller import GatewayController
 from .health import build_health_report
-from .installer import DiaphoraInstaller, EnvironmentInstaller
+from .installer import EnvironmentInstaller, SoffInstaller
 from .models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     EnvironmentProbe,
     GatewayStatus,
     HealthReport,
@@ -24,6 +22,8 @@ from .models import (
     McpServerEntry,
     ModelProvider,
     SkillEntry,
+    SoffInstallationCheck,
+    SoffInstallationResult,
     SupervisorSnapshot,
     derive_plugin_dir,
 )
@@ -41,7 +41,7 @@ class SupervisorManager:
         self._shared_db = self.config_store.database
         self.ida_mcp_config_store = ida_mcp_config_store
         self.installer = installer or EnvironmentInstaller()
-        self.diaphora_installer = DiaphoraInstaller()
+        self.soff_installer = SoffInstaller()
         self.gateway_controller = gateway_controller or GatewayController(
             self.config_store
         )
@@ -136,27 +136,27 @@ class SupervisorManager:
             on_progress=on_progress,
         )
         if on_progress:
-            on_progress("[Diaphora] Installing Diaphora plugin...")
-        diaphora_result = self.diaphora_installer.install(plugin_dir=plugin_dir)
+            on_progress("[Soff] Installing Soff plugin...")
+        soff_result = self.soff_installer.install(plugin_dir=plugin_dir)
         if on_progress:
-            on_progress(f"[Diaphora] {diaphora_result.summary}")
+            on_progress(f"[Soff] {soff_result.summary}")
 
         warnings = list(ida_mcp_result.warnings)
         warnings.extend(
-            f"diaphora: {warning}" for warning in diaphora_result.warnings
+            f"soff: {warning}" for warning in soff_result.warnings
         )
-        if not diaphora_result.ok:
-            warnings.append(f"diaphora: {diaphora_result.summary}")
+        if not soff_result.ok:
+            warnings.append(f"soff: {soff_result.summary}")
 
-        ok = ida_mcp_result.ok and diaphora_result.ok
-        if ida_mcp_result.ok and diaphora_result.ok:
+        ok = ida_mcp_result.ok and soff_result.ok
+        if ida_mcp_result.ok and soff_result.ok:
             summary = "Installation completed successfully"
         elif ida_mcp_result.ok:
-            summary = f"ida_mcp installed; {diaphora_result.summary}"
-        elif diaphora_result.ok:
-            summary = f"{ida_mcp_result.summary}; diaphora installed successfully"
+            summary = f"ida_mcp installed; {soff_result.summary}"
+        elif soff_result.ok:
+            summary = f"{ida_mcp_result.summary}; soff installed successfully"
         else:
-            summary = f"{ida_mcp_result.summary}; {diaphora_result.summary}"
+            summary = f"{ida_mcp_result.summary}; {soff_result.summary}"
 
         return InstallationActionResult(
             action=ida_mcp_result.action,
@@ -174,18 +174,18 @@ class SupervisorManager:
         return self.installer.install_requirements(python_executable=python_path)
 
     # ------------------------------------------------------------------
-    # Diaphora installation
+    # Soff installation
     # ------------------------------------------------------------------
 
-    def check_diaphora_installation(self) -> DiaphoraInstallationCheck:
+    def check_soff_installation(self) -> SoffInstallationCheck:
         config = self.get_ide_config()
-        return self.diaphora_installer.check_installation(
+        return self.soff_installer.check_installation(
             plugin_dir=self._resolve_plugin_dir(config),
         )
 
-    def install_diaphora(self) -> DiaphoraInstallationResult:
+    def install_soff(self) -> SoffInstallationResult:
         config = self.get_ide_config()
-        return self.diaphora_installer.install(
+        return self.soff_installer.install(
             plugin_dir=self._resolve_plugin_dir(config),
         )
 

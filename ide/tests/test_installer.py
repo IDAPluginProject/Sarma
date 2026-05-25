@@ -5,13 +5,13 @@ import pytest
 
 from shared.ida_mcp_config import IdaMcpConfigStore
 from supervisor.config_store import IdeConfigStore
-from supervisor.installer import DiaphoraInstaller, EnvironmentInstaller
+from supervisor.installer import EnvironmentInstaller, SoffInstaller
 from supervisor.manager import SupervisorManager
 from supervisor.models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     InstallationActionResult,
     InstallationCheck,
+    SoffInstallationCheck,
+    SoffInstallationResult,
 )
 from supervisor.platform_detector import (
     PlatformDetector,
@@ -144,67 +144,54 @@ def test_repair_config_uses_explicit_config_path(tmp_path: Path) -> None:
     assert explicit_config.read_text(encoding="utf-8") == "enable_http = true\n"
 
 
-def _make_diaphora_resources(root: Path, *, complete: bool = True) -> Path:
-    resources = root / "diaphora"
-    plugin = resources / "plugin"
-    plugin.mkdir(parents=True)
-    (plugin / "diaphora_plugin.py").write_text("# wrapper\n", encoding="utf-8")
-    (plugin / "diaphora_plugin.cfg").write_text(
-        "[Diaphora]\npath=/path/to/diaphora/\n",
-        encoding="utf-8",
-    )
-    if complete:
-        for name in ("diaphora.py", "diaphora_ida.py", "diaphora_config.py"):
-            (resources / name).write_text("# core\n", encoding="utf-8")
+def _make_soff_resources(root: Path) -> Path:
+    resources = root / "soff"
+    resources.mkdir(parents=True)
+    if sys.platform == "win32":
+        (resources / "soff-windows-x64.dll").write_bytes(b"\x00" * 16)
+    elif sys.platform == "darwin":
+        (resources / "soff-macos-arm64.dylib").write_bytes(b"\x00" * 16)
+    else:
+        (resources / "soff-linux-x64.so").write_bytes(b"\x00" * 16)
     return resources
 
 
-def test_diaphora_install_writes_cfg_and_reports_success(tmp_path: Path) -> None:
-    resources = _make_diaphora_resources(tmp_path)
+def test_soff_install_copies_binary_and_reports_success(tmp_path: Path) -> None:
+    resources = _make_soff_resources(tmp_path)
     plugin_dir = tmp_path / "ida" / "plugins"
 
-    result = DiaphoraInstaller(resources).install(plugin_dir)
+    result = SoffInstaller(resources).install(plugin_dir)
 
     assert result.ok is True
     assert result.installed is True
-    assert result.check.cfg_path_correct is True
-    assert result.check.bundle_files_exist is True
-    cfg = (plugin_dir / "diaphora_plugin.cfg").read_text(encoding="utf-8")
-    assert str(resources).replace("\\", "/") in cfg
+    assert result.check.plugin_file_exists is True
+    assert result.check.bundle_file_exists is True
 
 
-def test_diaphora_install_fails_when_bundle_core_files_missing(tmp_path: Path) -> None:
-    resources = _make_diaphora_resources(tmp_path, complete=False)
+def test_soff_install_fails_when_binary_missing(tmp_path: Path) -> None:
+    resources = tmp_path / "soff"
+    resources.mkdir(parents=True)
     plugin_dir = tmp_path / "ida" / "plugins"
 
-    result = DiaphoraInstaller(resources).install(plugin_dir)
+    result = SoffInstaller(resources).install(plugin_dir)
 
     assert result.ok is False
     assert result.installed is False
-    assert result.check.bundle_files_exist is False
-    assert "bundled diaphora files are missing" in result.warnings
 
 
-def test_diaphora_check_rejects_cfg_pointing_elsewhere(tmp_path: Path) -> None:
-    resources = _make_diaphora_resources(tmp_path)
+def test_soff_check_reports_not_installed(tmp_path: Path) -> None:
+    resources = _make_soff_resources(tmp_path)
     plugin_dir = tmp_path / "ida" / "plugins"
     plugin_dir.mkdir(parents=True)
-    (plugin_dir / "diaphora_plugin.py").write_text("# wrapper\n", encoding="utf-8")
-    (plugin_dir / "diaphora_plugin.cfg").write_text(
-        "[Diaphora]\npath=C:/other/diaphora/\n",
-        encoding="utf-8",
-    )
 
-    check = DiaphoraInstaller(resources).check_installation(plugin_dir)
+    check = SoffInstaller(resources).check_installation(plugin_dir)
 
-    assert check.plugin_py_exists is True
-    assert check.plugin_cfg_exists is True
-    assert check.cfg_path_correct is False
-    assert check.bundle_files_exist is True
-    assert check.summary == "diaphora installation is incomplete"
+    assert check.plugin_file_exists is False
+    assert check.bundle_file_exists is True
+    assert check.summary == "soff is not installed"
 
 
-def test_manager_reinstall_installs_ida_mcp_and_diaphora(
+def test_manager_reinstall_installs_ida_mcp_and_soff(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -244,28 +231,26 @@ def test_manager_reinstall_installs_ida_mcp_and_diaphora(
             created=True,
         )
 
-    class _FakeDiaphoraInstaller:
+    class _FakeSoffInstaller:
         plugin_dir: str | Path | None = None
 
         def install(self, plugin_dir=None):
             self.plugin_dir = plugin_dir
-            return DiaphoraInstallationResult(
+            return SoffInstallationResult(
                 action="install",
                 ok=True,
-                summary="diaphora installed successfully",
-                check=DiaphoraInstallationCheck(
+                summary="soff installed successfully",
+                check=SoffInstallationCheck(
                     plugin_dir=str(plugin_dir),
-                    plugin_py_exists=True,
-                    plugin_cfg_exists=True,
-                    cfg_path_correct=True,
-                    bundle_files_exist=True,
-                    summary="diaphora is installed and configured",
+                    plugin_file_exists=True,
+                    bundle_file_exists=True,
+                    summary="soff is installed",
                 ),
                 installed=True,
             )
 
-    diaphora_installer = _FakeDiaphoraInstaller()
-    manager.diaphora_installer = diaphora_installer
+    soff_installer = _FakeSoffInstaller()
+    manager.soff_installer = soff_installer
     monkeypatch.setattr("supervisor.install_runner.run_install", _fake_run_install)
 
     progress: list[str] = []
@@ -275,9 +260,9 @@ def test_manager_reinstall_installs_ida_mcp_and_diaphora(
     assert result.summary == "Installation completed successfully"
     assert run_install_calls
     assert run_install_calls[0]["plugin_dir"] == str(plugin_dir)
-    assert diaphora_installer.plugin_dir == str(plugin_dir)
-    assert "[Diaphora] Installing Diaphora plugin..." in progress
-    assert "[Diaphora] diaphora installed successfully" in progress
+    assert soff_installer.plugin_dir == str(plugin_dir)
+    assert "[Soff] Installing Soff plugin..." in progress
+    assert "[Soff] soff installed successfully" in progress
 
 
 # ------------------------------------------------------------------

@@ -13,7 +13,7 @@ The repository is the parent project for the IDE. Runtime plugins are tracked as
 | Path | Remote | Branch | Role |
 |------|--------|--------|------|
 | `ide/resources/ida_mcp` | `git@github.com:Captain-AI-Hub/IDA-MCP.git` | `main` | IDA-MCP plugin, gateway, MCP tools/resources, and live-IDA tests |
-| `ide/resources/diaphora` | `https://github.com/joxeankoret/diaphora` | `master` | Bundled Diaphora resources used by IDE install/config flows |
+| `ide/resources/soff/` | `https://github.com/Captain-AI-Hub/soff` | release | Soff binary diff engine plugin binaries |
 
 ## Repository Layout
 
@@ -26,7 +26,7 @@ Sarma/
 │   ├── shared/                  # Paths, database, DTOs, config helpers
 │   ├── resources/
 │   │   ├── ida_mcp/             # Git submodule: standalone IDA-MCP plugin repo
-│   │   ├── diaphora/            # Git submodule: Diaphora upstream
+│   │   ├── soff/                # Soff binary diff plugin binaries
 │   │   ├── i18n/                # IDE localization resources
 │   │   └── icons/               # IDE icons
 │   ├── tests/                   # IDE pytest suite
@@ -55,7 +55,6 @@ To update resource submodules to their configured tracking branches:
 
 ```bash
 git submodule update --remote ide/resources/ida_mcp
-git submodule update --remote ide/resources/diaphora
 ```
 
 ## Launching the IDE

@@ -114,12 +114,12 @@ class SettingsPage(QWidget):
         self._ida_mcp_config_path = QLineEdit()
         self._ida_mcp_config_path.setReadOnly(True)
 
-        # --- Diaphora widgets ---
-        self._diaphora_status = QLabel()
-        self._diaphora_status.setObjectName("settingsFieldDescription")
-        self._diaphora_details = QLabel()
-        self._diaphora_details.setObjectName("settingsFieldDescription")
-        self._diaphora_details.setWordWrap(True)
+        # --- Soff widgets ---
+        self._soff_status = QLabel()
+        self._soff_status.setObjectName("settingsFieldDescription")
+        self._soff_details = QLabel()
+        self._soff_details.setObjectName("settingsFieldDescription")
+        self._soff_details.setWordWrap(True)
 
         self._ida_dir = QLineEdit()
         self._ida_dir.setPlaceholderText(self._t("settings.field.ida_dir.placeholder"))
@@ -520,31 +520,31 @@ class SettingsPage(QWidget):
         ida_mcp_bar_layout.addWidget(install_button)
         layout.addWidget(ida_mcp_bar)
 
-        # --- Diaphora Plugin Section ---
+        # --- Soff Plugin Section ---
         layout.addWidget(
             self._build_config_group(
-                self._t("settings.diaphora.title"),
-                self._t("settings.diaphora.desc"),
+                self._t("settings.soff.title"),
+                self._t("settings.soff.desc"),
                 [
-                    self._diaphora_status,
-                    self._diaphora_details,
+                    self._soff_status,
+                    self._soff_details,
                 ],
             )
         )
 
-        diaphora_bar = QWidget()
-        diaphora_bar_layout = QHBoxLayout(diaphora_bar)
-        diaphora_bar_layout.setContentsMargins(0, 0, 0, 0)
-        diaphora_bar_layout.setSpacing(8)
-        diaphora_bar_layout.addStretch(1)
-        diaphora_check = QPushButton(self._t("settings.install.check"))
-        diaphora_check.clicked.connect(self._check_diaphora)
-        diaphora_install = QPushButton(self._t("settings.install.install"))
-        diaphora_install.setObjectName("primaryButton")
-        diaphora_install.clicked.connect(self._install_diaphora)
-        diaphora_bar_layout.addWidget(diaphora_check)
-        diaphora_bar_layout.addWidget(diaphora_install)
-        layout.addWidget(diaphora_bar)
+        soff_bar = QWidget()
+        soff_bar_layout = QHBoxLayout(soff_bar)
+        soff_bar_layout.setContentsMargins(0, 0, 0, 0)
+        soff_bar_layout.setSpacing(8)
+        soff_bar_layout.addStretch(1)
+        soff_check = QPushButton(self._t("settings.install.check"))
+        soff_check.clicked.connect(self._check_soff)
+        soff_install = QPushButton(self._t("settings.install.install"))
+        soff_install.setObjectName("primaryButton")
+        soff_install.clicked.connect(self._install_soff)
+        soff_bar_layout.addWidget(soff_check)
+        soff_bar_layout.addWidget(soff_install)
+        layout.addWidget(soff_bar)
 
         # --- Requirements (editable) ---
         req_bar = QWidget()
@@ -1439,9 +1439,9 @@ class SettingsPage(QWidget):
         # Defer installation check to a background worker — never block UI.
         self._install_ctrl.run_check()
 
-        # Refresh Diaphora status after the page is displayed. This check can
+        # Refresh Soff status after the page is displayed. This check can
         # touch plugin directories, so it should not slow window construction.
-        QTimer.singleShot(0, self._refresh_diaphora_status)
+        QTimer.singleShot(0, self._refresh_soff_status)
 
         self._form_binder.apply_form_state(form_state)
 
@@ -1515,7 +1515,7 @@ class SettingsPage(QWidget):
 
     def _handle_install_result(self, result) -> None:
         self._install_display.apply_installation_check(result.check)
-        self._refresh_diaphora_status()
+        self._refresh_soff_status()
         message = build_reinstall_message(result, self._t, self._bool_text)
         QMessageBox.information(
             self,
@@ -1584,52 +1584,43 @@ class SettingsPage(QWidget):
             self._install_notes.setPlainText(f"Error: {exc}")
 
     def _install_all(self) -> None:
-        """Run full installation: IDA-MCP + Diaphora + Requirements."""
+        """Run full installation: IDA-MCP + Soff + Requirements."""
         self._install_notes.setPlainText("Installing all...")
         self.reinstall()
         self._install_all_requirements()
 
     # ------------------------------------------------------------------
-    # Diaphora install
+    # Soff install
     # ------------------------------------------------------------------
 
-    def _refresh_diaphora_status(self) -> None:
-        """Update the Diaphora status label from a background check."""
+    def _refresh_soff_status(self) -> None:
+        """Update the Soff status label from a background check."""
         try:
-            check = self._settings_service.check_diaphora_installation()
+            check = self._settings_service.check_soff_installation()
         except AttributeError:
             return
-        installed = (
-            check.plugin_py_exists
-            and check.plugin_cfg_exists
-            and check.cfg_path_correct
-            and check.bundle_files_exist
-        )
-        if installed:
-            status_text = self._t("settings.diaphora.installed")
+        if check.plugin_file_exists:
+            status_text = self._t("settings.soff.installed")
         else:
-            status_text = self._t("settings.diaphora.not_installed")
+            status_text = self._t("settings.soff.not_installed")
 
         parts = []
-        parts.append(f"{self._t('settings.diaphora.plugin_py')}: {self._bool_text(check.plugin_py_exists)}")
-        parts.append(f"{self._t('settings.diaphora.plugin_cfg')}: {self._bool_text(check.plugin_cfg_exists)}")
-        if check.plugin_cfg_exists:
-            parts.append(f"{self._t('settings.diaphora.cfg_path_ok')}: {self._bool_text(check.cfg_path_correct)}")
-        parts.append(f"Bundle files: {self._bool_text(check.bundle_files_exist)}")
+        parts.append(f"{self._t('settings.soff.plugin_file')}: {self._bool_text(check.plugin_file_exists)}")
+        parts.append(f"Bundle: {self._bool_text(check.bundle_file_exists)}")
         if check.warnings:
             parts.append("")
             parts.extend(f"- {w}" for w in check.warnings)
 
-        self._diaphora_status.setText(status_text)
-        self._diaphora_details.setText("\n".join(parts))
+        self._soff_status.setText(status_text)
+        self._soff_details.setText("\n".join(parts))
 
-    def _check_diaphora(self) -> None:
-        self._refresh_diaphora_status()
+    def _check_soff(self) -> None:
+        self._refresh_soff_status()
 
-    def _install_diaphora(self) -> None:
+    def _install_soff(self) -> None:
         try:
-            result = self._settings_service.install_diaphora()
-            self._refresh_diaphora_status()
+            result = self._settings_service.install_soff()
+            self._refresh_soff_status()
             if result.ok:
                 QMessageBox.information(
                     self,

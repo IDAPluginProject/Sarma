@@ -9,12 +9,12 @@ from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, 
 from shared.models import ConfigStoreInfo, IdaMcpConfig
 from supervisor.api import ISupervisorAPI, create_api
 from supervisor.models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     HealthReport,
     InstallationActionResult,
     InstallationCheck,
     IdeConfig,
+    SoffInstallationCheck,
+    SoffInstallationResult,
     SupervisorSnapshot,
 )
 
@@ -77,11 +77,11 @@ class SupervisorClient:
     def detect_ida_python(self, ida_dir: str) -> str | None:
         return self._api.detect_ida_python(ida_dir)
 
-    def check_diaphora_installation(self) -> DiaphoraInstallationCheck:
-        return self._api.check_diaphora_installation()
+    def check_soff_installation(self) -> SoffInstallationCheck:
+        return self._api.check_soff_installation()
 
-    def install_diaphora(self) -> DiaphoraInstallationResult:
-        return self._api.install_diaphora()
+    def install_soff(self) -> SoffInstallationResult:
+        return self._api.install_soff()
 
     # --- Model providers ---
 
