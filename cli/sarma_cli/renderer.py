@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from rich.console import Console
+import time
+
+from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -85,23 +88,61 @@ def print_reasoning(content: str) -> None:
 
 
 class StreamPrinter:
-    """Accumulates streaming tokens and renders them incrementally."""
+    """Accumulates streaming tokens and renders live markdown.
+
+    Uses Rich Live to progressively re-render the accumulated content
+    as formatted Markdown. Refreshes at most every 80ms to avoid flicker.
+    """
+
+    # Minimum interval between Live refreshes (seconds).
+    _REFRESH_INTERVAL = 0.08
 
     def __init__(self) -> None:
         self._buffer: list[str] = []
         self._reasoning_buffer: list[str] = []
+        self._live: Live | None = None
+        self._last_refresh: float = 0.0
+        self._tool_lines: list[str] = []
+
+    def _ensure_live(self) -> Live:
+        if self._live is None:
+            self._live = Live(
+                Text(""), console=console, refresh_per_second=12, vertical_overflow="visible"
+            )
+            self._live.start()
+        return self._live
 
     def feed_token(self, token: str) -> None:
         self._buffer.append(token)
-        console.print(token, end="", highlight=False)
+        now = time.monotonic()
+        if now - self._last_refresh >= self._REFRESH_INTERVAL:
+            self._refresh()
+            self._last_refresh = now
 
     def feed_reasoning(self, token: str) -> None:
         self._reasoning_buffer.append(token)
 
+    def interrupt_for_tool(self, line: str) -> None:
+        """Temporarily pause live rendering to print a tool line."""
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        console.print(line, highlight=False)
+
     def flush(self) -> str:
+        """Stop live rendering and return accumulated content."""
         content = "".join(self._buffer)
-        if self._buffer:
-            console.print()
+
+        if self._live is not None:
+            # Final render with complete content
+            if content.strip():
+                self._live.update(Markdown(content))
+            self._live.stop()
+            self._live = None
+        elif content.strip():
+            # Never started live (e.g. empty stream) — just print
+            console.print(Markdown(content))
+
         self._buffer.clear()
 
         reasoning = "".join(self._reasoning_buffer)
@@ -110,6 +151,15 @@ class StreamPrinter:
         self._reasoning_buffer.clear()
 
         return content
+
+    def _refresh(self) -> None:
+        """Re-render current buffer as Markdown in the Live display."""
+        live = self._ensure_live()
+        content = "".join(self._buffer)
+        if content.strip():
+            live.update(Markdown(content))
+        else:
+            live.update(Text("…", style="dim"))
 
 
 def _truncate(text: str, max_len: int) -> str:

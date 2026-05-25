@@ -18,15 +18,16 @@ from sarma_cli.renderer import (
     print_banner,
     print_error,
     print_info,
-    print_markdown,
-    print_subagent_done,
-    print_subagent_start,
-    print_tool_error,
-    print_tool_result,
-    print_tool_start,
 )
 from sarma_cli.session import AuditSession
 from sarma_cli.store import Store
+
+
+def _truncate(text: str, max_len: int) -> str:
+    text = text.replace("\n", " ").strip()
+    if len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
 
 
 async def run_interactive(config: CliConfig) -> None:
@@ -150,32 +151,34 @@ def _handle_event(event: Any, printer: StreamPrinter) -> None:
             printer.feed_reasoning(reasoning)
 
     elif etype == StreamEventType.TOOL_START:
-        printer.flush()
+        # Pause live markdown, print tool line, resume on next token
         name = payload.get("tool_name", "?")
-        args = payload.get("args_json", "")
-        print_tool_start(name, args)
+        args = _truncate(payload.get("args_json", ""), 100)
+        printer.interrupt_for_tool(f"  [cyan]▶ {name}[/] [dim]{args}[/]")
 
     elif etype == StreamEventType.TOOL_RESULT:
         name = payload.get("tool_name", "?")
-        result = payload.get("result_summary", "")
-        print_tool_result(name, result)
+        result = _truncate(payload.get("result_summary", ""), 160)
+        printer.interrupt_for_tool(f"  [green]✓ {name}[/] [dim]{result}[/]")
 
     elif etype == StreamEventType.TOOL_ERROR:
         name = payload.get("tool_name", "?")
-        error = payload.get("error_text", "")
-        print_tool_error(name, error)
+        error = _truncate(payload.get("error_text", ""), 160)
+        printer.interrupt_for_tool(f"  [red]✗ {name}[/] {error}")
 
     elif etype == StreamEventType.SUBAGENT_START:
-        printer.flush()
         name = payload.get("subagent", "")
         if name:
-            print_subagent_start(name)
+            printer.interrupt_for_tool(
+                f"\n[bold cyan]┌─ {name.upper()} ─────────────────────────[/]"
+            )
 
     elif etype == StreamEventType.SUBAGENT_COMPLETE:
-        printer.flush()
         name = payload.get("subagent", "")
         if name:
-            print_subagent_done(name)
+            printer.interrupt_for_tool(
+                f"[green]└─ {name} complete ─────────────────[/]\n"
+            )
 
     elif etype == StreamEventType.RUN_FAILED:
         printer.flush()
