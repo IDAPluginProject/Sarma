@@ -167,26 +167,24 @@ class InstallationActionResult:
 
 
 @dataclass(slots=True)
-class DiaphoraInstallationCheck:
-    """Check result for Diaphora plugin installation."""
+class SoffInstallationCheck:
+    """Check result for Soff plugin installation."""
 
     plugin_dir: str | None
-    plugin_py_exists: bool
-    plugin_cfg_exists: bool
-    cfg_path_correct: bool
-    bundle_files_exist: bool
+    plugin_file_exists: bool
+    bundle_file_exists: bool
     summary: str
     warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
-class DiaphoraInstallationResult:
-    """Result of a Diaphora install action."""
+class SoffInstallationResult:
+    """Result of a Soff install action."""
 
     action: str
     ok: bool
     summary: str
-    check: DiaphoraInstallationCheck
+    check: SoffInstallationCheck
     installed: bool = False
     warnings: list[str] = field(default_factory=list)
 

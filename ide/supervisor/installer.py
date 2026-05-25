@@ -9,14 +9,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared.paths import get_diaphora_resources_dir, get_ida_mcp_resources_dir
+from shared.paths import get_ida_mcp_resources_dir, get_soff_resources_dir
 
 from .models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     EnvironmentProbe,
     InstallationActionResult,
     InstallationCheck,
+    SoffInstallationCheck,
+    SoffInstallationResult,
 )
 from .platform_detector import PlatformDetector, _probe_ida_python_via_idapyswitch
 
@@ -543,90 +543,77 @@ class EnvironmentInstaller:
         return None
 
 
-class DiaphoraInstaller:
-    """Installer for the Diaphora/SarmaDiff IDA plugin.
+class SoffInstaller:
+    """Installer for the Soff binary diff IDA plugin.
 
-    Diaphora installation is lightweight: it only needs to copy
-    ``plugin/diaphora_plugin.py`` and ``plugin/diaphora_plugin.cfg``
-    into the IDA plugins directory, and update the cfg path.
+    Copies the platform-appropriate native plugin binary (.dll/.so/.dylib)
+    into the IDA plugins directory.
     """
 
-    _REQUIRED_BUNDLE_FILES = (
-        "diaphora.py",
-        "diaphora_ida.py",
-        "diaphora_config.py",
-    )
+    _PLATFORM_FILES = {
+        "win32": "soff-windows-x64.dll",
+        "linux": "soff-linux-x64.so",
+        "darwin": "soff-macos-arm64.dylib",
+    }
+
+    _DEST_NAMES = {
+        "win32": "soff.dll",
+        "linux": "soff.so",
+        "darwin": "soff.dylib",
+    }
 
     def __init__(self, resources_dir: Path | None = None) -> None:
-        self._resources_dir = resources_dir or get_diaphora_resources_dir()
-        self._plugin_files = ["diaphora_plugin.py", "diaphora_plugin.cfg"]
+        self._resources_dir = resources_dir or get_soff_resources_dir()
 
-    def _source_path(self, name: str) -> Path:
-        return self._resources_dir / "plugin" / name
+    def _platform_key(self) -> str:
+        import sys as _sys
+        return _sys.platform
 
-    def _dest_path(self, plugin_dir: Path, name: str) -> Path:
-        return plugin_dir / name
+    def _source_file(self) -> Path | None:
+        name = self._PLATFORM_FILES.get(self._platform_key())
+        if not name:
+            return None
+        return self._resources_dir / name
+
+    def _dest_name(self) -> str | None:
+        return self._DEST_NAMES.get(self._platform_key())
 
     def check_installation(
         self,
         plugin_dir: str | Path | None = None,
-    ) -> DiaphoraInstallationCheck:
+    ) -> SoffInstallationCheck:
         resolved_plugin_dir = self._resolve_plugin_dir(plugin_dir)
         warnings: list[str] = []
-        bundle_files_exist = self._bundle_files_exist()
+        source = self._source_file()
+        bundle_file_exists = bool(source and source.exists())
 
         if not resolved_plugin_dir:
-            if not bundle_files_exist:
-                warnings.append("bundled diaphora files are missing")
-            return DiaphoraInstallationCheck(
+            if not bundle_file_exists:
+                warnings.append("bundled soff binary is missing")
+            return SoffInstallationCheck(
                 plugin_dir=None,
-                plugin_py_exists=False,
-                plugin_cfg_exists=False,
-                cfg_path_correct=False,
-                bundle_files_exist=bundle_files_exist,
+                plugin_file_exists=False,
+                bundle_file_exists=bundle_file_exists,
                 summary="plugin directory not found",
                 warnings=["IDA plugins directory could not be determined"] + warnings,
             )
 
-        plugin_py = resolved_plugin_dir / "diaphora_plugin.py"
-        plugin_cfg = resolved_plugin_dir / "diaphora_plugin.cfg"
+        dest_name = self._dest_name()
+        plugin_file_exists = bool(
+            dest_name and (resolved_plugin_dir / dest_name).exists()
+        )
+        if not bundle_file_exists:
+            warnings.append("bundled soff binary is missing")
 
-        plugin_py_exists = plugin_py.exists()
-        plugin_cfg_exists = plugin_cfg.exists()
-
-        cfg_path_correct = False
-        if plugin_cfg_exists:
-            try:
-                cfg_path_correct = self._cfg_points_to_bundle(plugin_cfg)
-            except Exception as exc:
-                warnings.append(f"could not read diaphora_plugin.cfg: {exc}")
-        if not bundle_files_exist:
-            warnings.append("bundled diaphora files are missing")
-
-        if not plugin_py_exists and not plugin_cfg_exists:
-            summary = "diaphora is not installed"
-        elif (
-            plugin_py_exists
-            and plugin_cfg_exists
-            and cfg_path_correct
-            and bundle_files_exist
-        ):
-            summary = "diaphora is installed and configured"
+        if plugin_file_exists:
+            summary = "soff is installed"
         else:
-            summary = "diaphora installation is incomplete"
-            if plugin_py_exists and not plugin_cfg_exists:
-                warnings.append("diaphora_plugin.cfg is missing")
-            elif not plugin_py_exists and plugin_cfg_exists:
-                warnings.append("diaphora_plugin.py is missing")
-            elif plugin_cfg_exists and not cfg_path_correct:
-                warnings.append("diaphora_plugin.cfg points to wrong path")
+            summary = "soff is not installed"
 
-        return DiaphoraInstallationCheck(
+        return SoffInstallationCheck(
             plugin_dir=str(resolved_plugin_dir),
-            plugin_py_exists=plugin_py_exists,
-            plugin_cfg_exists=plugin_cfg_exists,
-            cfg_path_correct=cfg_path_correct,
-            bundle_files_exist=bundle_files_exist,
+            plugin_file_exists=plugin_file_exists,
+            bundle_file_exists=bundle_file_exists,
             summary=summary,
             warnings=warnings,
         )
@@ -634,10 +621,10 @@ class DiaphoraInstaller:
     def install(
         self,
         plugin_dir: str | Path | None = None,
-    ) -> DiaphoraInstallationResult:
+    ) -> SoffInstallationResult:
         check = self.check_installation(plugin_dir)
         if not check.plugin_dir:
-            return DiaphoraInstallationResult(
+            return SoffInstallationResult(
                 action="install",
                 ok=False,
                 summary="cannot install: plugin directory not found",
@@ -648,60 +635,44 @@ class DiaphoraInstaller:
         resolved_plugin_dir.mkdir(parents=True, exist_ok=True)
 
         warnings: list[str] = []
+        source = self._source_file()
+        dest_name = self._dest_name()
 
-        # Copy plugin file
-        copied_py = False
-        src_py = self._source_path("diaphora_plugin.py")
-        dst_py = resolved_plugin_dir / "diaphora_plugin.py"
-        if src_py.exists():
-            try:
-                shutil.copy2(src_py, dst_py)
-                copied_py = True
-            except OSError as exc:
-                warnings.append(f"failed to copy diaphora_plugin.py: {exc}")
-        else:
-            warnings.append("diaphora_plugin.py not found in bundle")
-
-        # Copy and update cfg file
-        wrote_cfg = False
-        src_cfg = self._source_path("diaphora_plugin.cfg")
-        dst_cfg = resolved_plugin_dir / "diaphora_plugin.cfg"
-        if src_cfg.exists():
-            cfg_text = src_cfg.read_text(encoding="utf-8")
-            # Replace the path placeholder with the actual bundle path
-            bundle_path = str(self._resources_dir).replace("\\", "/")
-            cfg_text = cfg_text.replace(
-                "path=/path/to/tools/diaphora/",
-                f"path={bundle_path}/",
+        if not source or not source.exists():
+            return SoffInstallationResult(
+                action="install",
+                ok=False,
+                summary="soff binary not found for this platform",
+                check=check,
+                warnings=["no soff binary available for this platform"],
             )
-            cfg_text = cfg_text.replace(
-                "path=/path/to/diaphora/",
-                f"path={bundle_path}/",
-            )
-            try:
-                dst_cfg.write_text(cfg_text, encoding="utf-8")
-                wrote_cfg = True
-            except OSError as exc:
-                warnings.append(f"failed to write diaphora_plugin.cfg: {exc}")
-        else:
-            warnings.append("diaphora_plugin.cfg not found in bundle")
 
-        # Re-check
+        if not dest_name:
+            return SoffInstallationResult(
+                action="install",
+                ok=False,
+                summary="unsupported platform",
+                check=check,
+                warnings=["platform not supported"],
+            )
+
+        dst = resolved_plugin_dir / dest_name
+        try:
+            shutil.copy2(source, dst)
+        except OSError as exc:
+            warnings.append(f"failed to copy soff plugin: {exc}")
+            return SoffInstallationResult(
+                action="install",
+                ok=False,
+                summary="soff install failed",
+                check=check,
+                warnings=warnings,
+            )
+
         new_check = self.check_installation(plugin_dir)
-        ok = (
-            copied_py
-            and wrote_cfg
-            and new_check.plugin_py_exists
-            and new_check.plugin_cfg_exists
-            and new_check.cfg_path_correct
-            and new_check.bundle_files_exist
-        )
-        summary = (
-            "diaphora installed successfully"
-            if ok
-            else "diaphora install incomplete"
-        )
-        return DiaphoraInstallationResult(
+        ok = new_check.plugin_file_exists
+        summary = "soff installed successfully" if ok else "soff install incomplete"
+        return SoffInstallationResult(
             action="install",
             ok=ok,
             summary=summary,
@@ -723,25 +694,3 @@ class DiaphoraInstaller:
 
     def _find_plugin_dirs(self) -> list[str]:
         return PlatformDetector().find_plugin_dirs()
-
-    def _bundle_files_exist(self) -> bool:
-        return all(
-            (self._resources_dir / name).exists()
-            for name in self._REQUIRED_BUNDLE_FILES
-        )
-
-    def _cfg_points_to_bundle(self, cfg_path: Path) -> bool:
-        """Check whether the cfg file points to the bundled diaphora directory."""
-        try:
-            text = cfg_path.read_text(encoding="utf-8")
-        except Exception:
-            return False
-        bundle_path = str(self._resources_dir).replace("\\", "/").rstrip("/")
-        # Look for path= line pointing to our bundle
-        for line in text.splitlines():
-            line = line.strip()
-            if line.lower().startswith("path="):
-                path_value = line[5:].strip().replace("\\", "/").rstrip("/")
-                if path_value == bundle_path:
-                    return True
-        return False

@@ -23,9 +23,9 @@ def get_ida_mcp_resources_dir() -> Path:
     return get_resources_root() / "ida_mcp"
 
 
-def get_diaphora_resources_dir() -> Path:
-    """Return the diaphora bundled resource directory."""
-    return get_resources_root() / "diaphora"
+def get_soff_resources_dir() -> Path:
+    """Return the soff bundled resource directory."""
+    return get_resources_root() / "soff"
 
 
 def get_logs_root() -> Path:

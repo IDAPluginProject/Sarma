@@ -134,7 +134,7 @@ Sarma/
 │   │
 │   ├── resources/                    # 捆绑资源
 │   │   ├── ida_mcp/                  #   [Git Submodule] IDA-MCP 插件
-│   │   ├── diaphora/                 #   [Git Submodule] Diaphora
+│   │   ├── soff/                     #   Soff 二进制对比插件
 │   │   ├── i18n/                     #   国际化文案
 │   │   ├── icons/                    #   图标资源
 │   │   └── logo.png
@@ -194,7 +194,7 @@ IDA Plugin ──HTTP─→ Gateway /internal/register
 | 路径 | 远程 | 分支 | 用途 |
 |------|------|------|------|
 | `ide/resources/ida_mcp` | Captain-AI-Hub/IDA-MCP.git | main | IDA-MCP 插件 |
-| `ide/resources/diaphora` | joxeankoret/diaphora | master | Diaphora 二进制比对 |
+| `ide/resources/soff/` | Captain-AI-Hub/soff | release | Soff 二进制对比引擎 |
 
 ## 项目状态摘要
 

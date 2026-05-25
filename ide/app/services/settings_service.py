@@ -9,13 +9,13 @@ from app.i18n import normalize_language
 from app.services.supervisor_client import SupervisorClient
 from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, SkillDTO
 from supervisor.models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     HealthReport,
     IdaMcpConfig,
     InstallationActionResult,
     InstallationCheck,
     IdeConfig,
+    SoffInstallationCheck,
+    SoffInstallationResult,
 )
 
 
@@ -127,10 +127,10 @@ class SettingsService:
             agent_name, provider_id
         )
 
-    # --- Diaphora ---
+    # --- Soff ---
 
-    def check_diaphora_installation(self) -> DiaphoraInstallationCheck:
-        return self._supervisor_client.check_diaphora_installation()
+    def check_soff_installation(self) -> SoffInstallationCheck:
+        return self._supervisor_client.check_soff_installation()
 
-    def install_diaphora(self) -> DiaphoraInstallationResult:
-        return self._supervisor_client.install_diaphora()
+    def install_soff(self) -> SoffInstallationResult:
+        return self._supervisor_client.install_soff()

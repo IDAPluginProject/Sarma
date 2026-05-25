@@ -12,12 +12,12 @@ from typing import Callable, Protocol, runtime_checkable
 from shared.dto import AgentModelAssignmentDTO, McpServerDTO, ModelProviderDTO, SkillDTO
 from shared.models import ConfigStoreInfo, IdaMcpConfig
 from supervisor.models import (
-    DiaphoraInstallationCheck,
-    DiaphoraInstallationResult,
     HealthReport,
     IdeConfig,
     InstallationActionResult,
     InstallationCheck,
+    SoffInstallationCheck,
+    SoffInstallationResult,
     SupervisorSnapshot,
 )
 
@@ -48,8 +48,8 @@ class ISupervisorAPI(Protocol):
     def detect_ida_executable(self, ida_dir: str) -> str | None: ...
     def detect_ida_python(self, ida_dir: str) -> str | None: ...
 
-    def check_diaphora_installation(self) -> DiaphoraInstallationCheck: ...
-    def install_diaphora(self) -> DiaphoraInstallationResult: ...
+    def check_soff_installation(self) -> SoffInstallationCheck: ...
+    def install_soff(self) -> SoffInstallationResult: ...
 
     def get_model_providers(self) -> list[ModelProviderDTO]: ...
     def add_model_provider(self, name: str, base_url: str, api_key: str, api_mode: str,
@@ -139,11 +139,11 @@ class SupervisorAPIImpl:
     def detect_ida_python(self, ida_dir: str) -> str | None:
         return self._manager.installer.detect_ida_python(ida_dir)
 
-    def check_diaphora_installation(self) -> DiaphoraInstallationCheck:
-        return self._manager.check_diaphora_installation()
+    def check_soff_installation(self) -> SoffInstallationCheck:
+        return self._manager.check_soff_installation()
 
-    def install_diaphora(self) -> DiaphoraInstallationResult:
-        return self._manager.install_diaphora()
+    def install_soff(self) -> SoffInstallationResult:
+        return self._manager.install_soff()
 
     def get_model_providers(self) -> list[ModelProviderDTO]:
         return [p.to_dto() for p in self._manager.get_model_providers()]
