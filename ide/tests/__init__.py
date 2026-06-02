@@ -1,1 +1,0 @@
-"""IDE test package placeholder."""

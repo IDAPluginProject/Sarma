@@ -6,92 +6,134 @@
   <img src="Sarma.png" width="75%" alt="Sarma">
 </p>
 
-Sarma is a desktop IDE for IDA Pro automation. It provides a PySide6 workbench for installing and configuring reverse-engineering resources, managing the IDA-MCP gateway, and running assistant-driven analysis workflows without coupling the IDE runtime to IDA Python internals.
+Sarma is a lightweight terminal agent for vulnerability auditing. It drives a
+LangGraph ReAct agent over any MCP toolset (for example [IDA-MCP](https://github.com/Captain-AI-Hub/IDA-MCP)),
+streams reasoning and tool calls live in your terminal, and ships an opt-in
+8-stage audit pipeline for structured reverse-engineering workflows.
 
-The repository is the parent project for the IDE. Runtime plugins are tracked as submodules under `ide/resources/`:
+## Install
 
-| Path | Remote | Branch | Role |
-|------|--------|--------|------|
-| `ide/resources/ida_mcp` | `git@github.com:Captain-AI-Hub/IDA-MCP.git` | `main` | IDA-MCP plugin, gateway, MCP tools/resources, and live-IDA tests |
-| `ide/resources/soff/` | `https://github.com/Captain-AI-Hub/soff` | release | Soff binary diff engine plugin binaries |
+Requires Python 3.12+.
 
-## Repository Layout
+```bash
+git clone https://github.com/Captain-AI-Hub/Sarma.git
+cd Sarma
+pip install -e .
+```
+
+This installs the `sarma` command. For development you can also run it without
+installing:
+
+```bash
+python src/main.py
+```
+
+## Quick start
+
+```bash
+# 1. Just start the shell
+sarma
+
+# 2. Inside the shell, configure your model interactively (saved to ~/.sarma)
+sarma [chat]> /config
+
+# One-shot, non-interactive (requires a model already configured)
+sarma -c "Audit the firmware in ./target.bin for command injection"
+```
+
+`/config` prompts for model name, API mode, base URL, and API key, then saves
+them to `~/.sarma/config.toml`. The change applies to the running session on the
+next turn. (CLI flags `-m/--api-key/--base-url/--api-mode` still work as optional
+overrides, handy for scripting `-c`.)
+
+## Workflows
+
+Sarma runs in one of several workflows; switch at any time, effective on the next turn.
+
+| Workflow | How to enter | What it does |
+|----------|--------------|--------------|
+| `chat` (default) | `sarma` / `/workflow chat` | Direct ReAct conversation with the agent and its tools |
+| `audit` | `sarma workflow audit` / `/workflow audit` | Full harness: recon → hunt → validate (⇄ gapfill) → dedupe → trace → feedback (↺ hunt) → report |
+| `audit-slim` | `/workflow audit-slim` | Lightweight 3-stage pass: recon (audits) → verify (confirms reliability) → report (validates + user feedback) |
+
+The REPL prompt shows the active workflow: `sarma [chat]>`, `sarma [audit]>`, or `sarma [audit-slim]>`.
+
+## Slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List commands |
+| `/status` | Model, MCP tool count, and skills status |
+| `/graph` | Render the current workflow's execution graph |
+| `/workflow [name]` | List workflows, or switch to one |
+| `/models` | Show the configured model |
+| `/history` | List past conversations |
+| `/resume <id>` | Resume a previous conversation |
+| `/config` | Show current configuration |
+| `/clear` | Clear the current session |
+| `/exit` | Quit |
+
+## Configuration
+
+Config is layered TOML. `sarma init` writes the **global** file at `~/.sarma/config.toml`
+(on Windows, `C:\Users\<you>\.sarma\config.toml`). Optionally, `sarma init --local`
+writes a per-workspace `./.sarma/config.toml` that overrides individual fields.
+
+Resolution order (highest wins):
+
+```
+CLI flags  >  env vars  >  ./.sarma/config.toml (local)  >  ~/.sarma/config.toml (global)
+```
+
+The local file is merged onto the global one field-by-field — set just `model_name`
+locally and everything else (API key, MCP servers) is inherited. MCP servers merge
+**by name**: a same-named local server overrides the global one, new names are added.
+
+```toml
+[provider]
+model_name = "gpt-4o"
+api_key = ""
+base_url = ""
+api_mode = "openai_compatible"   # openai_compatible | openai_responses | anthropic
+temperature = 0.7
+
+# Repeat [[mcp_servers]] for each server
+[[mcp_servers]]
+name = "ida-mcp"
+transport = "streamable_http"
+url = "http://127.0.0.1:11338/mcp"
+enabled = true
+```
+
+Environment overrides: `SARMA_MODEL`, `SARMA_API_KEY`, `SARMA_BASE_URL`, `SARMA_API_MODE`.
+Set `SARMA_HOME` to relocate the global config directory (it then *is* the sarma dir).
+
+Conversation history is per-workspace, stored in `./.sarma/db.sqlite`.
+
+## Project layout
 
 ```text
 Sarma/
-├── ide/                         # PySide6 desktop IDE and supervisor
-│   ├── launcher.py              # Development entry point
-│   ├── app/                     # UI, presenters, chat/workspace services
-│   ├── supervisor/              # Installer, gateway lifecycle, health checks
-│   ├── shared/                  # Paths, database, DTOs, config helpers
-│   ├── resources/
-│   │   ├── ida_mcp/             # Git submodule: standalone IDA-MCP plugin repo
-│   │   ├── soff/                # Soff binary diff plugin binaries
-│   │   ├── i18n/                # IDE localization resources
-│   │   └── icons/               # IDE icons
-│   ├── tests/                   # IDE pytest suite
-│   └── resources/
-│       └── skills/              # Agent skill materials used by local workflows
-├── codemap.md                   # Architecture atlas and entry-point index
-└── project.md                   # Repository project map
+├── pyproject.toml          # Package + `sarma` entry point
+├── pytest.ini              # Test config
+├── README.md / README_CN.md
+└── src/
+    ├── main.py             # Dev launcher (python src/main.py)
+    └── sarma_cli/
+        ├── __main__.py     # CLI entry: init / workflow / install + REPL
+        ├── app.py          # Interactive REPL loop
+        ├── session.py      # Conversation lifecycle (workflow-aware)
+        ├── config.py       # Layered global+local config loading
+        ├── paths.py        # Cross-platform path resolution
+        ├── store.py        # SQLite persistence
+        ├── renderer.py     # Live streaming output
+        ├── status.py       # Status panel
+        ├── engine/         # Agent runtime (LangGraph, MCP pool, audit graph, prompts)
+        ├── workflows/      # chat + audit workflow definitions
+        └── commands/       # Slash-command handlers
 ```
 
-## Getting the Source
+## License
 
-Clone with submodules so the IDE has the plugin resources it installs:
+MIT — see [LICENSE](LICENSE).
 
-```bash
-git clone --recurse-submodules git@github.com:Captain-AI-Hub/Sarma.git
-cd Sarma
-```
-
-If the repository was cloned without submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-To update resource submodules to their configured tracking branches:
-
-```bash
-git submodule update --remote ide/resources/ida_mcp
-```
-
-## Launching the IDE
-
-```bash
-python ide/launcher.py
-```
-
-The IDE project targets Python 3.12 and uses the dependencies declared under `ide/`. For development, install IDE dependencies from `ide/requirements.txt` or use the Poetry project in `ide/pyproject.toml`.
-
-## IDA-MCP Boundary
-
-`ide/resources/ida_mcp` is a standalone Git submodule. It contains:
-
-- `ida_mcp.py`, the IDA plugin entry file exposing `PLUGIN_ENTRY()`.
-- `ida_mcp/`, the plugin package with FastMCP instance server, gateway, proxy, CLI, and API modules.
-- `API.md`, the tool/resource/internal HTTP contract reference.
-- `test/`, the live-IDA pytest suite.
-
-The IDE may copy these files, launch `ida_mcp/command.py` as a subprocess, and edit plugin configuration. It must not import `ida_mcp` modules directly because they depend on the IDA Python runtime.
-
-## Development Commands
-
-```bash
-# IDE tests
-pytest ide/tests
-
-# Plugin smoke compile from the submodule
-python -m compileall -q ide/resources/ida_mcp/ida_mcp.py ide/resources/ida_mcp/ida_mcp ide/resources/ida_mcp/test
-
-# Plugin live tests require a running gateway and registered IDA instance
-python ide/resources/ida_mcp/test/test.py
-```
-
-## Documentation
-
-- `codemap.md` - repository architecture, entry points, and runtime boundaries.
-- `project.md` - Sarma parent-repository project map.
-- Roadmap and IDE rules are merged into `codemap.md` and `project.md`.
-- `ide/resources/ida_mcp/API.md` - IDA-MCP API contract.

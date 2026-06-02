@@ -1,38 +1,38 @@
-__pycache__
-.codex
-.vscode
-.pytest_cache
-.cache/
-.xmake/
-.artifacts/
-.ruff_cache/
-.mypy_cache/
+# Python
+__pycache__/
+*.pyc
 *.egg-info/
 build/
-build-*/
 dist/
 htmlcov/
-site/
-*.log
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+
+# Sarma runtime data (created by `sarma init`)
+.sarma/
+
+# Databases
 *.sqlite
 *.sqlite3
 *.db
 *.db-shm
 *.db-wal
-*.tmp
-ide/data/skills/
-skills/*.zip
-*.bak
-*.orig
+
+# Virtualenv
 .venv/
+
+# Editors / OS
+.vscode/
+.codex/
 Thumbs.db
 .DS_Store
-ide/resources/ida_mcp/.artifacts/api_logs/
-*.i64
-*.id0
-*.id1
-*.id2
-*.nam
-*.til
-ide/.pytest_tmp/
-chinese_*.txt
+
+# Misc
+*.log
+*.tmp
+*.bak
+*.orig
