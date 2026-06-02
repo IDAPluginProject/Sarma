@@ -209,61 +209,117 @@ def _cmd_resume(arg: str) -> bool | str:
 
 
 def _cmd_config(config: CliConfig) -> None:
-    """Interactively configure the provider and save to ~/.sarma/config.toml.
+    """Interactively manage providers (add / edit / switch).
 
-    Prompts for model, API mode, base URL, and API key. Press Enter to keep
-    the current value. Changes apply to the live session immediately (next
-    turn) and are persisted to the global config.
+    Lists all saved providers. Choose one to edit, or pick "Add model" to
+    create a new provider entry. Changes are saved immediately and take
+    effect on the next turn.
     """
-    from rich.prompt import Prompt
-    from sarma_cli.config import API_MODES, save_global_provider
+    from rich.prompt import Prompt, IntPrompt
+    from sarma_cli.config import API_MODES, save_global_provider, ProviderConfig
 
-    p = config.provider
-    console.print("[bold]Configure provider[/] [dim](Enter keeps current value)[/]")
+    console.print("[bold]Configure Providers[/]\n")
 
-    # Model name
-    model = Prompt.ask("  Model name", default=p.model_name or None) or ""
+    provs: list[ProviderConfig] = list(config.providers)
+    if not provs:
+        provs = [config.provider]
 
-    # API mode
-    console.print(f"  API mode options: [dim]{', '.join(API_MODES)}[/]")
-    api_mode = Prompt.ask(
-        "  API mode",
-        choices=list(API_MODES),
-        default=p.api_mode or API_MODES[0],
-    )
+    active_index = None
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="dim")
+    table.add_column("Name")
+    table.add_column("Model")
+    table.add_column("API Mode")
+    table.add_column("Active", style="green")
+    for i, p in enumerate(provs):
+        marker = "▶" if p.default else ""
+        table.add_row(str(i + 1), p.name, p.model_name or "(not set)",
+                      p.api_mode, marker)
+        if p.default:
+            active_index = i
+    console.print(table)
 
-    # Base URL (blank = provider default)
-    base_url = Prompt.ask(
-        "  Base URL [dim](blank for provider default)[/]",
-        default=p.base_url or "",
-        show_default=bool(p.base_url),
-    )
+    # Offer actions: pick a provider to edit, or add a new one
+    console.print("\n[bold]Actions:[/]")
+    console.print("  [cyan]1[/] - Add new model")
+    for i in range(len(provs)):
+        console.print(f"  [cyan]{i + 2}[/] - Edit [bold]{provs[i].name}[/]")
+    console.print("  Press Enter to go back\n")
 
-    # API key (masked default)
-    masked = ("***" + p.api_key[-4:]) if p.api_key else "(not set)"
-    entered = Prompt.ask(
-        f"  API key [dim](current: {masked}; Enter keeps)[/]",
-        default="",
-        password=True,
-        show_default=False,
-    )
-    api_key = entered if entered else p.api_key
-
-    # Apply to live session (Session holds config by reference)
-    p.model_name = model.strip()
-    p.api_mode = api_mode
-    p.base_url = base_url.strip()
-    p.api_key = api_key
-
-    # Persist to global config
     try:
-        path = save_global_provider(p)
+        choice = IntPrompt.ask("Choose", choices=["1"] + [str(i + 2) for i in range(len(provs))])
+    except (KeyboardInterrupt, ValueError):
+        return
+
+    if choice == 1:
+        # Add a new provider
+        new_p = _prompt_provider(ProviderConfig(name="New Model"))
+        if not new_p.model_name and not new_p.name:
+            console.print("[yellow]Skipped — no model name given.[/]")
+            return
+        # If this is the first user-added model, make it default
+        existing_names = {p.name for p in provs}
+        if new_p.name in existing_names:
+            console.print(f"[yellow]Provider '{new_p.name}' already exists; editing it instead.[/]")
+            for p in provs:
+                if p.name == new_p.name:
+                    p.model_name = new_p.model_name
+                    p.api_mode = new_p.api_mode
+                    p.base_url = new_p.base_url
+                    p.api_key = new_p.api_key
+                    break
+        else:
+            new_p.default = not config.providers
+            config.providers.append(new_p)
+    else:
+        idx = choice - 2
+        p = provs[idx]
+        edited = _prompt_provider(p)
+        # When editing, the user can also toggle default
+        if edited.default:
+            for other in config.providers:
+                other.default = False
+        p.name = edited.name
+        p.model_name = edited.model_name
+        p.api_mode = edited.api_mode
+        p.base_url = edited.base_url
+        p.api_key = edited.api_key
+        p.default = edited.default
+
+    # Persist the full providers list
+    try:
+        path = save_all_providers(config.providers)
         console.print(f"[green]✓[/] Saved to [cyan]{path}[/]")
     except Exception as exc:
         console.print(f"[red]✗[/] Could not save config: {exc}")
         return
 
-    if p.model_name:
-        console.print(f"[dim]Active model:[/] [green]{p.model_name}[/] ({p.api_mode})")
+    active = config.provider
+    if active and active.model_name:
+        console.print(f"[dim]Active model:[/] [green]{active.model_name}[/] ({active.api_mode})")
     else:
-        console.print("[yellow]No model set yet — run /config again to set one.[/]")
+        console.print("[yellow]No active model — add one with /config.[/]")
+
+
+def _prompt_provider(base: ProviderConfig) -> ProviderConfig:
+    """Prompt the user for provider fields; returns a filled ProviderConfig."""
+    from rich.prompt import Prompt
+    from sarma_cli.config import ProviderConfig as PC, API_MODES
+
+    name = Prompt.ask("  Name [dim](display label)[/]", default=base.name or None) or base.name or "Default"
+    model = Prompt.ask("  Model name", default=base.model_name or None) or ""
+    console.print(f"  API mode options: [dim]{', '.join(API_MODES)}[/]")
+    api_mode = Prompt.ask("  API mode", choices=list(API_MODES),
+                          default=base.api_mode or API_MODES[0])
+    base_url = Prompt.ask("  Base URL [dim](blank for provider default)[/]",
+                          default=base.base_url or "", show_default=bool(base.base_url))
+    masked = ("***" + base.api_key[-4:]) if base.api_key else "(not set)"
+    entered = Prompt.ask(f"  API key [dim](current: {masked}; Enter keeps)[/]",
+                         default="", password=True, show_default=False)
+    api_key = entered if entered else base.api_key
+    default = Prompt.ask("  Set as active?", choices=["y", "n"], default="y" if base.default else "n") == "y"
+
+    return PC(name=name.strip(), model_name=model.strip(), api_mode=api_mode,
+              base_url=base_url.strip(), api_key=api_key,
+              temperature=base.temperature, top_p=base.top_p,
+              max_context_tokens=base.max_context_tokens, default=default)

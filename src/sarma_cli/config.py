@@ -20,8 +20,12 @@ API_MODES = ("openai_compatible", "openai_responses", "anthropic")
 _DEFAULT_CONFIG_TOML = """\
 # Sarma CLI configuration
 # Docs: https://github.com/Captain-AI-Hub/Sarma
+#
+# Provider: add as many as you like with [[providers]].
+# The one with default = true (or the first listed) is active.
 
-[provider]
+[[providers]]
+name = "Default"
 model_name = ""
 api_key = ""
 base_url = ""
@@ -29,6 +33,7 @@ api_mode = "openai_compatible"   # openai_compatible | openai_responses | anthro
 temperature = 0.7
 top_p = 1.0
 max_context_tokens = 128000
+default = true
 
 # MCP servers (repeat [[mcp_servers]] for each server)
 # [[mcp_servers]]
@@ -38,7 +43,7 @@ max_context_tokens = 128000
 # enabled = true
 
 # Agent: which skills to load and which MCP servers the agent may call.
-# The agent's model is [provider].model_name above.
+# The agent's model is driven by the active provider above.
 [agent]
 # Skill directory names under ~/.sarma/skills or ./.sarma/skills.
 skills = []
@@ -50,6 +55,7 @@ mcp_servers = []
 
 @dataclass(slots=True)
 class ProviderConfig:
+    name: str = ""            # human-readable label
     model_name: str = ""
     api_key: str = ""
     base_url: str = ""
@@ -57,6 +63,7 @@ class ProviderConfig:
     temperature: float = 0.7
     top_p: float = 1.0
     max_context_tokens: int = 128_000
+    default: bool = False     # the active provider
 
 
 @dataclass(slots=True)
@@ -90,9 +97,19 @@ class AgentConfig:
 
 @dataclass(slots=True)
 class CliConfig:
-    provider: ProviderConfig = field(default_factory=ProviderConfig)
+    providers: list[ProviderConfig] = field(default_factory=list)
     mcp_servers: list[McpServerConfig] = field(default_factory=list)
     agent: AgentConfig = field(default_factory=AgentConfig)
+
+    @property
+    def provider(self) -> ProviderConfig:
+        """Convenience: the active (default-marked) provider, or the first, or a blank."""
+        for p in self.providers:
+            if p.default:
+                return p
+        if self.providers:
+            return self.providers[0]
+        return ProviderConfig()
 
     @property
     def provider_dict(self) -> dict[str, Any]:
@@ -156,16 +173,53 @@ def _read_toml(path: Any) -> dict[str, Any]:
 def _merge_raw(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Merge two raw TOML dicts; ``override`` wins.
 
-    - ``provider``: merged key-by-key (a field present in ``override`` wins).
-    - ``mcp_servers``: merged by ``name`` (override replaces a same-named server
-      and appends new ones).
+    - ``providers``: merged by ``name`` (override replaces a same-named provider
+      and appends new ones). ``default`` is cleared from all providers, then set
+      on the override's default (or the first).
+    - ``mcp_servers``: merged by ``name``.
     """
     merged: dict[str, Any] = {}
 
-    prov = dict(base.get("provider") or {})
-    prov.update(override.get("provider") or {})
-    if prov:
-        merged["provider"] = prov
+    provs: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw_p in list(base.get("providers") or []) + list(override.get("providers") or []):
+        name = str(raw_p.get("name", ""))
+        if name not in provs:
+            order.append(name)
+        provs[name] = {**provs.get(name, {}), **raw_p}
+    # After merging, exactly one provider should be default: the last one
+    # in the override that explicitly set default = true. If none did,
+    # fall back to the last in the base, then the first in the merged list.
+    if order:
+        default_candidate: str | None = None
+        # Walk in reverse — last override with default=true wins.
+        for raw_p in reversed(list(override.get("providers") or [])):
+            if raw_p.get("default"):
+                default_candidate = str(raw_p.get("name", ""))
+                break
+        if default_candidate is None:
+            for raw_p in reversed(list(base.get("providers") or [])):
+                if raw_p.get("default"):
+                    default_candidate = str(raw_p.get("name", ""))
+                    break
+        if default_candidate is None:
+            default_candidate = order[0]
+        # Clear all defaults, then set the winner
+        for n in provs:
+            provs[n]["default"] = False
+        provs[default_candidate]["default"] = True
+        merged["providers"] = [provs[n] for n in order]
+
+    # Backward-compat: old single [provider] as the merge anchor
+    bp = dict(base.get("provider") or {})
+    op = dict(override.get("provider") or {})
+    bp.update(op)
+    if bp:
+        bp["name"] = str(bp.get("name", "Default"))
+        merged["provider"] = bp
+        # If we also parsed providers above, ensure we have a default.
+        if "providers" not in merged:
+            merged["providers"] = [bp]
 
     servers: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -189,8 +243,23 @@ def _merge_raw(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def _parse_toml(data: dict[str, Any]) -> CliConfig:
     """Parse a TOML dict into CliConfig."""
     config = CliConfig()
+    # providers: list of [[providers]] tables (TOML array of tables)
+    for raw_p in data.get("providers", []):
+        config.providers.append(ProviderConfig(
+            name=str(raw_p.get("name", "")),
+            model_name=str(raw_p.get("model_name", "")),
+            api_key=str(raw_p.get("api_key", "")),
+            base_url=str(raw_p.get("base_url", "")),
+            api_mode=str(raw_p.get("api_mode", "openai_compatible")),
+            temperature=float(raw_p.get("temperature", 0.7)),
+            top_p=float(raw_p.get("top_p", 1.0)),
+            max_context_tokens=int(raw_p.get("max_context_tokens", 128_000)),
+            default=bool(raw_p.get("default", False)),
+        ))
+    # Backward-compat: a flat [provider] table maps to one default provider.
     if prov := data.get("provider"):
-        config.provider = ProviderConfig(
+        config.providers.append(ProviderConfig(
+            name=str(prov.get("name", "Default")),
             model_name=str(prov.get("model_name", "")),
             api_key=str(prov.get("api_key", "")),
             base_url=str(prov.get("base_url", "")),
@@ -198,7 +267,8 @@ def _parse_toml(data: dict[str, Any]) -> CliConfig:
             temperature=float(prov.get("temperature", 0.7)),
             top_p=float(prov.get("top_p", 1.0)),
             max_context_tokens=int(prov.get("max_context_tokens", 128_000)),
-        )
+            default=True,
+        ))
     for srv in data.get("mcp_servers", []):
         config.mcp_servers.append(McpServerConfig(
             name=str(srv.get("name", "")),
@@ -317,12 +387,19 @@ def _toml_value(v: Any) -> str:
 
 
 def _dump_toml(data: dict[str, Any]) -> str:
-    """Minimal TOML writer for our schema (provider, agent, mcp_servers)."""
+    """Minimal TOML writer for our schema (providers, agent, mcp_servers)."""
     lines: list[str] = []
-    prov = data.get("provider")
-    if prov:
+    provs = data.get("providers")
+    if provs:
+        for prov in provs:
+            lines.append("[[providers]]")
+            for k, v in prov.items():
+                lines.append(f"{k} = {_toml_value(v)}")
+            lines.append("")
+    # backward-compat: single [provider] table
+    elif data.get("provider"):
         lines.append("[provider]")
-        for k, v in prov.items():
+        for k, v in data["provider"].items():
             lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
     agent = data.get("agent")
@@ -339,20 +416,45 @@ def _dump_toml(data: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def save_global_provider(provider: ProviderConfig) -> Any:
-    """Persist provider settings to the effective config file.
+def save_all_providers(providers: list[ProviderConfig]) -> Any:
+    """Persist the full providers list to the effective config file.
 
-    Targets the local ``./.sarma/config.toml`` when it exists (it overrides the
-    global, so saving there is what the user sees take effect); otherwise writes
-    the global ``~/.sarma/config.toml``. Reads only that one raw file so other
-    layers/env never leak in, replaces ``[provider]``, preserves the rest, and
-    writes it back. Returns the path written.
+    Like ``save_global_provider``, targets local first, falls back to global.
     """
     target = paths.local_config_file()
     if not target.exists():
         target = paths.global_config_file()
     raw = _read_toml(target)
-    raw["provider"] = {
+    raw["providers"] = [
+        {
+            "name": p.name, "model_name": p.model_name, "api_key": p.api_key,
+            "base_url": p.base_url, "api_mode": p.api_mode,
+            "temperature": p.temperature, "top_p": p.top_p,
+            "max_context_tokens": p.max_context_tokens, "default": p.default,
+        }
+        for p in providers
+    ]
+    raw.pop("provider", None)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_dump_toml(raw), encoding="utf-8")
+    return target
+
+
+def save_global_provider(provider: ProviderConfig) -> Any:
+    """Persist provider settings to the effective config file.
+
+    Targets the local ``./.sarma/config.toml`` when it exists, otherwise the
+    global ``~/.sarma/config.toml``.  Reads only that one raw file so other
+    layers/vars never leak in, replaces the matched provider by name (or appends
+    it), and writes it back.  Returns the path written.
+    """
+    target = paths.local_config_file()
+    if not target.exists():
+        target = paths.global_config_file()
+    raw = _read_toml(target)
+
+    prov_dict = {
+        "name": provider.name,
         "model_name": provider.model_name,
         "api_key": provider.api_key,
         "base_url": provider.base_url,
@@ -360,7 +462,23 @@ def save_global_provider(provider: ProviderConfig) -> Any:
         "temperature": provider.temperature,
         "top_p": provider.top_p,
         "max_context_tokens": provider.max_context_tokens,
+        "default": provider.default,
     }
+
+    provs = raw.get("providers") or []
+    replaced = False
+    for i, p in enumerate(provs):
+        if isinstance(p, dict) and p.get("name") == provider.name:
+            provs[i] = prov_dict
+            replaced = True
+            break
+    if not replaced:
+        provs.append(prov_dict)
+    raw["providers"] = provs
+
+    # Drop the old single-provider key so readers don't see a stale copy.
+    raw.pop("provider", None)
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_dump_toml(raw), encoding="utf-8")
     return target
