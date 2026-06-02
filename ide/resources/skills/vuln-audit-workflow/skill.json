@@ -1,8 +1,0 @@
-{
-  "name": "vuln-audit-workflow",
-  "version": "1.0.0",
-  "description": "8-stage vulnerability discovery harness execution rules and inter-stage contracts for IDA binary audit",
-  "author": "Sarma",
-  "tags": ["audit", "vulnerability", "ida", "workflow", "pipeline"],
-  "entry": "SKILL.md"
-}

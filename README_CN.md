@@ -6,92 +6,132 @@
   <img src="Sarma.png" width="75%" alt="Sarma">
 </p>
 
-Sarma 是面向 IDA Pro 自动化的桌面 IDE。它提供 PySide6 工作台，用于安装和配置逆向工程资源、管理 IDA-MCP gateway，并承载面向分析工作的 assistant/chat/workspace 流程。
+Sarma 是一个轻量级终端漏洞审计 agent。它在任意 MCP 工具集
+（例如 [IDA-MCP](https://github.com/Captain-AI-Hub/IDA-MCP)）之上驱动
+LangGraph ReAct agent，在终端中实时流式输出推理与工具调用，并提供一个可选的
+8 阶段审计 pipeline，用于结构化的逆向工程工作流。
 
-本仓库是 IDE 父项目。运行时插件资源以 submodule 形式放在 `ide/resources/`：
+## 安装
 
-| 路径 | 远程 | 分支 | 职责 |
-|------|------|------|------|
-| `ide/resources/ida_mcp` | `git@github.com:Captain-AI-Hub/IDA-MCP.git` | `main` | IDA-MCP 插件、gateway、MCP tools/resources、live-IDA 测试 |
-| `ide/resources/soff/` | `https://github.com/Captain-AI-Hub/soff` | release | Soff 二进制对比引擎插件 |
+需要 Python 3.12+。
 
-## 仓库结构
+```bash
+git clone https://github.com/Captain-AI-Hub/Sarma.git
+cd Sarma
+pip install -e .
+```
+
+这会安装 `sarma` 命令。开发时也可以不安装直接运行：
+
+```bash
+python src/main.py
+```
+
+## 快速开始
+
+```bash
+# 1. 直接启动 shell
+sarma
+
+# 2. 在 shell 中交互式配置模型（保存到 ~/.sarma）
+sarma [chat]> /config
+
+# 单次非交互执行（需已配置模型）
+sarma -c "审计 ./target.bin 固件中的命令注入漏洞"
+```
+
+`/config` 会依次询问模型名、API 接口模式、Base URL、API key，然后保存到
+`~/.sarma/config.toml`。修改在当前会话的下一轮即生效。（命令行参数
+`-m/--api-key/--base-url/--api-mode` 仍作为可选覆盖保留，便于脚本化 `-c`。）
+
+## 工作流
+
+Sarma 运行在多种工作流之一；可随时切换，下一轮生效。
+
+| 工作流 | 进入方式 | 作用 |
+|--------|----------|------|
+| `chat`（默认） | `sarma` / `/workflow chat` | 与 agent 及其工具直接进行 ReAct 对话 |
+| `audit` | `sarma workflow audit` / `/workflow audit` | 完整 harness:recon → hunt → validate（⇄ gapfill）→ dedupe → trace → feedback（↺ hunt）→ report |
+| `audit-slim` | `/workflow audit-slim` | 轻量三阶段:recon（负责审计）→ verify（确保结果真实可靠）→ report（验证结果并给用户反馈） |
+
+REPL 提示符会显示当前工作流：`sarma [chat]>`、`sarma [audit]>` 或 `sarma [audit-slim]>`。
+
+## 斜杠命令
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 列出命令 |
+| `/status` | 模型、MCP 工具数量、skills 状态 |
+| `/graph` | 渲染当前工作流的执行图 |
+| `/workflow [name]` | 列出工作流，或切换到某个工作流 |
+| `/models` | 显示已配置的模型 |
+| `/history` | 列出历史会话 |
+| `/resume <id>` | 恢复历史会话 |
+| `/config` | 显示当前配置 |
+| `/clear` | 清空当前会话 |
+| `/exit` | 退出 |
+
+## 配置
+
+配置为分层 TOML。`sarma init` 写入**全局**文件 `~/.sarma/config.toml`
+（Windows 上为 `C:\Users\<你>\.sarma\config.toml`）。可选地，`sarma init --local`
+在当前工作区写入 `./.sarma/config.toml`，用于按字段覆盖全局配置。
+
+优先级顺序（高者覆盖低者）：
+
+```
+命令行参数  >  环境变量  >  ./.sarma/config.toml（本地）  >  ~/.sarma/config.toml（全局）
+```
+
+本地文件按字段合并到全局文件之上——只在本地设 `model_name`，其余（API key、MCP
+servers）全部继承全局。MCP servers 按 **name 合并**：同名的本地 server 覆盖全局，
+新名字则追加。
+
+```toml
+[provider]
+model_name = "gpt-4o"
+api_key = ""
+base_url = ""
+api_mode = "openai_compatible"   # openai_compatible | openai_responses | anthropic
+temperature = 0.7
+
+# 每个 MCP server 重复一个 [[mcp_servers]]
+[[mcp_servers]]
+name = "ida-mcp"
+transport = "streamable_http"
+url = "http://127.0.0.1:11338/mcp"
+enabled = true
+```
+
+环境变量覆盖：`SARMA_MODEL`、`SARMA_API_KEY`、`SARMA_BASE_URL`、`SARMA_API_MODE`。
+设置 `SARMA_HOME` 可重定向全局配置目录（设置后它即为 sarma 目录本身）。
+
+会话历史按工作区存储在 `./.sarma/db.sqlite`。
+
+## 项目结构
 
 ```text
 Sarma/
-├── ide/                         # PySide6 桌面 IDE 和 supervisor
-│   ├── launcher.py              # 开发入口
-│   ├── app/                     # UI、presenter、chat/workspace 服务
-│   ├── supervisor/              # 安装器、gateway 生命周期、健康检查
-│   ├── shared/                  # 路径、数据库、DTO、配置 helper
-│   ├── resources/
-│   │   ├── ida_mcp/             # Git submodule：独立 IDA-MCP 插件仓库
-│   │   ├── soff/                # Soff 二进制对比插件
-│   │   ├── i18n/                # IDE 多语言资源
-│   │   └── icons/               # IDE 图标
-│   ├── tests/                   # IDE pytest 测试
-│   └── resources/
-│       └── skills/              # 本地 Agent 工作流使用的技能材料
-├── codemap.md                   # 架构 atlas 和入口索引
-└── project.md                   # 仓库项目地图
+├── pyproject.toml          # 包配置 + `sarma` 入口
+├── pytest.ini              # 测试配置
+├── README.md / README_CN.md
+└── src/
+    ├── main.py             # 开发启动器（python src/main.py）
+    └── sarma_cli/
+        ├── __main__.py     # CLI 入口：init / workflow / install + REPL
+        ├── app.py          # 交互式 REPL 循环
+        ├── session.py      # 会话生命周期（工作流感知）
+        ├── config.py       # 分层全局+本地配置加载
+        ├── paths.py        # 跨平台路径解析
+        ├── store.py        # SQLite 持久化
+        ├── renderer.py     # 实时流式输出
+        ├── status.py       # 状态面板
+        ├── engine/         # Agent 运行时（LangGraph、MCP 连接池、审计图、prompts）
+        ├── workflows/      # chat + audit 工作流定义
+        └── commands/       # 斜杠命令处理
 ```
 
-## 获取源码
+## 许可证
 
-建议带 submodule 克隆：
+MIT — 见 [LICENSE](LICENSE)。
 
-```bash
-git clone --recurse-submodules git@github.com:Captain-AI-Hub/Sarma.git
-cd Sarma
-```
-
-如果已经克隆但没有初始化 submodule：
-
-```bash
-git submodule update --init --recursive
-```
-
-按 `.gitmodules` 配置更新资源 submodule：
-
-```bash
-git submodule update --remote ide/resources/ida_mcp
-```
-
-## 启动 IDE
-
-```bash
-python ide/launcher.py
-```
-
-IDE 项目目标 Python 3.12，依赖位于 `ide/requirements.txt` 和 `ide/pyproject.toml`。
-
-## IDA-MCP 边界
-
-`ide/resources/ida_mcp` 是独立 Git submodule，包含：
-
-- `ida_mcp.py`：IDA 插件入口文件，暴露 `PLUGIN_ENTRY()`。
-- `ida_mcp/`：插件包，包含 FastMCP instance server、gateway、proxy、CLI 和 API 模块。
-- `API.md`：tools/resources/internal HTTP 契约文档。
-- `test/`：需要 live IDA 环境的 pytest 套件。
-
-IDE 可以复制这些文件、以 subprocess 启动 `ida_mcp/command.py`、编辑插件配置；但 IDE 代码不能直接 import `ida_mcp` 模块，因为它们依赖 IDA Python 运行时。
-
-## 开发命令
-
-```bash
-# IDE 测试
-pytest ide/tests
-
-# 插件静态烟测
-python -m compileall -q ide/resources/ida_mcp/ida_mcp.py ide/resources/ida_mcp/ida_mcp ide/resources/ida_mcp/test
-
-# 插件 live 测试，需要运行中的 gateway 和已注册 IDA 实例
-python ide/resources/ida_mcp/test/test.py
-```
-
-## 文档入口
-
-- `codemap.md` - 仓库架构、入口和运行时边界。
-- `project.md` - Sarma 父仓库项目地图。
-- Roadmap 与 IDE 规则已经合并到 `codemap.md` 和 `project.md`。
-- `ide/resources/ida_mcp/API.md` - IDA-MCP API 契约。
