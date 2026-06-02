@@ -20,7 +20,7 @@ console = Console()
 
 COMMANDS: dict[str, str] = {
     "/help": "Show available commands",
-    "/status": "Show MCP, model, gateway, and skills status",
+    "/status": "Show MCP, model, and skills status",
     "/graph": "Show current workflow execution graph",
     "/workflow": "List workflows or switch workflow (/workflow <name>)",
     "/install": "Install MCP servers and dependencies",
