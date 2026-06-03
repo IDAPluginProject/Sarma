@@ -34,6 +34,7 @@ from sarma_cli.resources.plugins import (
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
 from sarma_cli.store import Store
 from sarma_cli.workflows import get_registry, init_workflows
+from sarma_cli.app import _is_quick_second_interrupt
 from sarma_cli.engine.ruflo import SUBAGENT_RESULT_TEMPLATE, build_ruflo_prompt
 from sarma_cli.session import Session
 from sarma_cli.status import render_status_panel
@@ -149,6 +150,12 @@ def test_subagent_tool_prefix_filter_fails_closed() -> None:
     tools = [Tool("ida_mcp_decompile"), Tool("ida_mcp_disasm")]
 
     assert _filter_tools_by_prefix(tools, ["missing_tool"]) == []
+
+
+def test_quick_second_interrupt_detection() -> None:
+    assert not _is_quick_second_interrupt(0.0, 10.0)
+    assert _is_quick_second_interrupt(10.0, 10.5)
+    assert not _is_quick_second_interrupt(10.0, 11.5)
 
 
 def test_mcp_connect_timeout_is_capped_for_responsiveness() -> None:
