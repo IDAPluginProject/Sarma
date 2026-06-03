@@ -33,11 +33,11 @@ class AuditSlimWorkflow(Workflow):
         text = Text()
         for i, stage in enumerate(self._stages):
             if stage == failed:
-                row_style, icon = "bold red", "✗"
+                row_style, icon = "bold #f85149", "✗"
             elif stage == current:
-                row_style, icon = "bold cyan", "▶"
+                row_style, icon = "bold #58a6ff", "▶"
             elif stage in completed:
-                row_style, icon = "green", "✓"
+                row_style, icon = "#3fb950", "✓"
             else:
                 row_style, icon = "dim", "○"
 
@@ -54,4 +54,4 @@ class AuditSlimWorkflow(Workflow):
             if stage != self._stages[-1]:
                 text.append("       │\n", style="dim")
 
-        return Panel(text, title="[bold]Audit-Slim[/]", border_style="blue", expand=False)
+        return Panel(text, title="[bold bright_blue]Audit-Slim[/]", border_style="#a371f7", expand=False)

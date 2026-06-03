@@ -1,4 +1,4 @@
-"""Agent construction and streaming execution for chat turns.
+"""Agent construction and streaming execution for Ruflo and audit turns.
 
 For audit-mode runs, uses LangGraph subgraph streaming
 (``subgraphs=True, version="v2"``) so that every token / tool call /
@@ -7,8 +7,7 @@ The :class:`EventTranslator` resolves namespace tuples into subagent
 names and emits :class:`StreamEvent` instances with a ``subagent``
 field on every payload.
 
-For regular chat, uses LangGraph's ``create_react_agent`` with standard
-streaming.
+For Ruflo, uses a primary LangGraph ReAct agent with controlled delegation.
 """
 
 from __future__ import annotations
@@ -17,9 +16,15 @@ import logging
 from typing import Any, AsyncIterator
 
 from sarma_cli.engine.agent_factory import AgentFactory
+from sarma_cli.engine.dto import McpServerDTO, ModelProviderDTO
 from sarma_cli.engine.errors import AgentRunError
 from sarma_cli.engine.mcp_pool import McpClientPool
-from sarma_cli.engine.models import AgentRunConfig, ChatMessage, ResolvedSkill, StreamEvent, resolve_skill
+from sarma_cli.engine.models import (
+    AgentRunConfig,
+    ConversationMessage,
+    ResolvedSkill,
+    StreamEvent,
+)
 from sarma_cli.engine.streaming import EventTranslator
 from sarma_cli.engine.enums import StreamEventType
 
@@ -33,43 +38,49 @@ class AgentRunner:
         self,
         factory: AgentFactory,
         pool: McpClientPool,
-        provider_dict: dict[str, Any],
-        servers_list: list[dict[str, Any]],
-        skill_dict: dict[str, Any] | None,
-        history: list[ChatMessage],
+        provider: ModelProviderDTO,
+        enabled_servers: list[McpServerDTO],
+        skill: ResolvedSkill | None,
+        history: list[ConversationMessage],
         system_prompt: str,
         conversation_id: str,
         turn_id: str,
         mode: str = "audit",
+        subagent_providers: dict[str, ModelProviderDTO] | None = None,
+        subagent_mcp_allow: dict[str, list[str] | None] | None = None,
+        subagent_skills: dict[str, ResolvedSkill | None] | None = None,
     ) -> None:
         self._factory = factory
         self._pool = pool
-        self._provider_dict = provider_dict
-        self._servers_list = servers_list
-        self._skill_dict = skill_dict
+        self._provider = provider
+        self._enabled_servers = enabled_servers
+        self._skill = skill
         self._history = history
         self._system_prompt = system_prompt
         self._conversation_id = conversation_id
         self._turn_id = turn_id
         self._mode = mode
+        self._subagent_providers = subagent_providers or {}
+        self._subagent_mcp_allow = subagent_mcp_allow or {}
+        self._subagent_skills = subagent_skills or {}
         self.assistant_content = ""
         self.reasoning_content = ""
         self.tool_calls: list[StreamEvent] = []
         self.run_config: AgentRunConfig | None = None
 
     async def run(self, message: str) -> AsyncIterator[StreamEvent]:
-        provider = self._parse_provider(self._provider_dict)
-        skill = self._parse_skill(self._skill_dict)
-        servers = self._parse_servers(self._servers_list)
         self.run_config = AgentRunConfig(
             conversation_id=self._conversation_id,
-            provider=provider,
-            skill=skill,
-            enabled_servers=servers,
+            provider=self._provider,
+            skill=self._skill,
+            enabled_servers=self._enabled_servers,
             message_history=self._history,
             user_message=message,
             system_prompt=self._system_prompt,
             mode=self._mode,
+            subagent_providers=self._subagent_providers,
+            subagent_mcp_allow=self._subagent_mcp_allow,
+            subagent_skills=self._subagent_skills,
         )
 
         agent, _tools = await self._factory.build(self.run_config)
@@ -138,24 +149,10 @@ class AgentRunner:
 
     @staticmethod
     def _build_input_messages(
-        history: list[ChatMessage], user_message: str
+        history: list[ConversationMessage], user_message: str
     ) -> list[Any]:
         from langchain_core.messages import HumanMessage
 
         messages: list[Any] = [msg.to_langchain_message() for msg in history]
         messages.append(HumanMessage(content=user_message))
         return messages
-
-    @staticmethod
-    def _parse_provider(data: dict[str, Any]) -> Any:
-        from sarma_cli.engine.dto import ModelProviderDTO
-        return ModelProviderDTO(**{k: v for k, v in data.items() if k in ModelProviderDTO.__dataclass_fields__})
-
-    @staticmethod
-    def _parse_skill(data: dict[str, Any] | None) -> ResolvedSkill | None:
-        return resolve_skill(data)
-
-    @staticmethod
-    def _parse_servers(data_list: list[dict[str, Any]]) -> list[Any]:
-        from sarma_cli.engine.dto import McpServerDTO
-        return [McpServerDTO(**{k: v for k, v in d.items() if k in McpServerDTO.__dataclass_fields__}) for d in data_list]

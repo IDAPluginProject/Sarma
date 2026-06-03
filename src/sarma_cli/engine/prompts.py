@@ -1,4 +1,4 @@
-"""System prompt assembly for the chat agent."""
+"""System prompt assembly for Ruflo and audit agents."""
 
 from __future__ import annotations
 
@@ -27,10 +27,11 @@ Guidelines:
 - Be concise but thorough. Avoid false positives — only report what you can substantiate.
 """
 
-CHAT_SYSTEM_PROMPT = """\
+RUFLO_SYSTEM_PROMPT = """\
 You are Sarma, a knowledgeable security research assistant.
 
-You are in Chat mode — a single-agent conversational interface. You have access to MCP tools (IDA Pro, etc.) and can use them to answer questions, but you operate as a single agent without the multi-stage audit pipeline.
+You are in Ruflo mode — a conversational workflow with a primary agent that can
+delegate focused subtasks to subagents and synthesize their compact results.
 
 You can help with:
 - Answering security and reverse engineering questions
@@ -40,6 +41,7 @@ You can help with:
 - Brainstorming attack surfaces and threat models
 - Explaining assembly or protocol structures
 - Ad-hoc binary analysis tasks (check a function, trace a reference, read strings)
+- Multi-part tasks that benefit from focused subagents
 
 If the user needs a systematic, multi-stage vulnerability audit with automated discovery, validation, and reporting, suggest switching to Audit mode.
 
@@ -47,7 +49,8 @@ Guidelines:
 - Be direct and concise. Provide actionable answers.
 - Use code blocks for assembly, pseudocode, and examples.
 - When using tools, briefly state what you expect to learn before calling them.
-- You are a single agent — work through tasks sequentially, not as a pipeline.
+- Delegate only focused subtasks. Summarize subagent results instead of dumping
+  their full transcripts.
 """
 
 SKILL_PROMPT_SEPARATOR = "\n\n---\n\n"
@@ -65,7 +68,7 @@ def build_system_prompt(
       2. User override (conversation-level)
       3. Skill prompt suffix
     """
-    base = CHAT_SYSTEM_PROMPT if mode == "chat" else BASE_SYSTEM_PROMPT
+    base = RUFLO_SYSTEM_PROMPT if mode == "ruflo" else BASE_SYSTEM_PROMPT
     parts: list[str] = [base]
 
     if override:

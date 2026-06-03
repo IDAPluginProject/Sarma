@@ -16,7 +16,9 @@ import os
 from pathlib import Path
 
 _DIR_NAME = ".sarma"
-_CONFIG_NAME = "config.toml"
+MODELS_NAME = "models.toml"
+AGENTS_NAME = "agents.toml"
+MCP_NAME = "mcp.toml"
 
 
 def global_dir() -> Path:
@@ -33,11 +35,35 @@ def local_dir() -> Path:
 
 
 def global_config_file() -> Path:
-    return global_dir() / _CONFIG_NAME
+    return global_models_file()
 
 
 def local_config_file() -> Path:
-    return local_dir() / _CONFIG_NAME
+    return local_models_file()
+
+
+def global_models_file() -> Path:
+    return global_dir() / MODELS_NAME
+
+
+def local_models_file() -> Path:
+    return local_dir() / MODELS_NAME
+
+
+def global_agents_file() -> Path:
+    return global_dir() / AGENTS_NAME
+
+
+def local_agents_file() -> Path:
+    return local_dir() / AGENTS_NAME
+
+
+def global_mcp_file() -> Path:
+    return global_dir() / MCP_NAME
+
+
+def local_mcp_file() -> Path:
+    return local_dir() / MCP_NAME
 
 
 def db_path() -> Path:

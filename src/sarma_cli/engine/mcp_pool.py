@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from sarma_cli.engine.errors import McpConnectionError
 
 logger = logging.getLogger(__name__)
+DEFAULT_MCP_CONNECT_TIMEOUT = 20.0
 
 
 def _config_fingerprint(configs: dict[str, dict[str, Any]]) -> str:
@@ -17,6 +19,15 @@ def _config_fingerprint(configs: dict[str, dict[str, Any]]) -> str:
         return json.dumps(configs, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return ""
+
+
+def _connect_timeout(configs: dict[str, dict[str, Any]]) -> float:
+    timeouts = [DEFAULT_MCP_CONNECT_TIMEOUT]
+    for config in configs.values():
+        timeout = config.get("timeout")
+        if isinstance(timeout, (int, float)) and timeout > 0:
+            timeouts.append(float(timeout))
+    return min(timeouts)
 
 
 class McpClientPool:
@@ -71,7 +82,10 @@ class McpClientPool:
             self._client = MultiServerMCPClient(
                 server_configs, tool_name_prefix=True
             )
-            self._tools = await self._client.get_tools()
+            self._tools = await asyncio.wait_for(
+                self._client.get_tools(),
+                timeout=_connect_timeout(server_configs),
+            )
             self._connected = True
             logger.info(
                 "MCP pool connected: %d tools from %d servers",
@@ -80,8 +94,7 @@ class McpClientPool:
             )
             return self._tools
         except Exception as exc:
-            self._client = None
-            self._connected = False
+            await self.disconnect()
             logger.error("MCP pool connection failed: %s", exc)
             raise McpConnectionError(
                 ", ".join(server_configs.keys()), str(exc)

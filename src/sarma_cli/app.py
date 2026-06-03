@@ -5,6 +5,7 @@ Ties together the workflow registry, session, and REPL loop.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -20,7 +21,10 @@ from sarma_cli.renderer import (
     print_banner,
     print_error,
     print_info,
+    print_success,
+    print_warning,
 )
+from sarma_cli.runtime.resolver import RuntimePolicyResolver
 from sarma_cli.session import Session
 from sarma_cli.store import Store
 from sarma_cli.workflows import get_registry, init_workflows
@@ -38,7 +42,7 @@ async def run_interactive(config: CliConfig) -> None:
     """Main interactive REPL with workflow support.
 
     Orchestrates:
-      1. Initialize workflow registry (chat, audit, etc.)
+      1. Initialize workflow registry (ruflo, audit, etc.)
       2. Create Session
       3. Main REPL loop:
          - Read user input
@@ -48,7 +52,7 @@ async def run_interactive(config: CliConfig) -> None:
          - Update graph state
       5. Support workflow switching
 
-    Supports multiple workflows: chat (default), audit, etc.
+    Supports multiple workflows: ruflo (default), audit, etc.
     """
     # 1. Initialize workflow registry
     init_workflows()
@@ -56,15 +60,16 @@ async def run_interactive(config: CliConfig) -> None:
 
     # 2. Create session
     store = Store()
+    resolver = RuntimePolicyResolver(config)
     session = Session(config, store)
 
     print_banner(
-        model=config.provider.model_name,
+        model=resolver.provider_for("ruflo").model_name,
         mcp_count=len([s for s in config.mcp_servers if s.enabled]),
     )
 
-    if not config.provider.model_name:
-        print_info("No model configured yet — run /config to set one up.")
+    if not resolver.provider_for("ruflo").model_name:
+        print_warning("No model configured yet — run /config to set one up.")
 
     # 4. Main REPL loop
     prompt_session: PromptSession = PromptSession(history=InMemoryHistory())
@@ -86,37 +91,61 @@ async def run_interactive(config: CliConfig) -> None:
 
             # Handle /commands
             if user_input.startswith("/"):
-                result = handle_command(
+                result = await handle_command(
                     user_input,
                     config=config,
                     store=store,
                     graph_state=session.graph_state,
-                    mcp_tool_count=session.tool_count,
+                    session=session,
                 )
                 if result == "exit":
                     break
                 elif result == "clear":
                     session.new_conversation()
-                    print_info("Session cleared.")
+                    print_success("Session cleared.")
+                    continue
+                elif result == "compact":
+                    try:
+                        compacted = await session.compact_context(
+                            force=True,
+                            workflow=registry.current_name() or "ruflo",
+                        )
+                    except Exception as exc:
+                        print_error(f"Context compaction failed: {exc}")
+                    else:
+                        print_success(
+                            "Context compacted."
+                            if compacted else "Context is already within model budget."
+                        )
+                    continue
+                elif result == "restart":
+                    await session.restart_runtime()
+                    resolver = RuntimePolicyResolver(config)
+                    print_success("Workflow runtime restarted.")
+                    console.print(f"[dim]─" * 40 + "[/]")
+                    print_banner(
+                        model=resolver.provider_for("ruflo").model_name,
+                        mcp_count=len([s for s in config.mcp_servers if s.enabled]),
+                    )
                     continue
                 elif isinstance(result, str) and result.startswith("resume:"):
                     cid = result.split(":", 1)[1]
                     if session.resume_conversation(cid):
-                        print_info(f"Resumed conversation {cid}")
+                        print_success(f"Resumed conversation [bright_blue]{cid}[/]")
                     else:
-                        print_error(f"Conversation {cid} not found.")
+                        print_error(f"Conversation [bold]{cid}[/] not found.")
                     continue
                 elif result:
                     continue
 
             # Run turn with agent
-            if not config.provider.model_name:
-                print_info("No model configured — run /config to set one up.")
+            if not resolver.provider_for(registry.current_name() or "ruflo").model_name:
+                print_warning("No model configured — run /config to set one up.")
                 continue
             try:
                 await _run_turn_interactive(session, user_input)
             except KeyboardInterrupt:
-                console.print("\n[dim]Interrupted.[/]")
+                console.print("\n[bold yellow]⚠ Interrupted.[/] Type /exit to quit.")
             except Exception as exc:
                 print_error(str(exc))
 
@@ -125,7 +154,7 @@ async def run_interactive(config: CliConfig) -> None:
     finally:
         await session.close()
         store.close()
-        console.print("\n[dim]Goodbye.[/]")
+        console.print(f"\n[bold #a371f7]Sarma[/] [dim]— Goodbye.[/]")
 
 
 async def run_oneshot(config: CliConfig, message: str) -> None:
@@ -133,8 +162,9 @@ async def run_oneshot(config: CliConfig, message: str) -> None:
 
     Used for non-interactive mode (e.g., piped input).
     """
-    if not config.provider.model_name:
-        print_error("No model configured. Start `sarma` and run /config, or pass -m/--api-key.")
+    resolver = RuntimePolicyResolver(config)
+    if not resolver.provider_for("ruflo").model_name:
+        print_error("No model configured. Start [bold]sarma[/] and run /config.")
         return
 
     store = Store()
@@ -185,42 +215,56 @@ def _handle_event(event: Any, printer: StreamPrinter) -> None:
     etype = event.type
     payload = event.payload
 
+
+
     if etype == StreamEventType.TOKEN:
-        token = payload.get("content", "")
-        if token:
-            printer.feed_token(token)
         reasoning = payload.get("reasoning_content", "")
         if reasoning:
             printer.feed_reasoning(reasoning)
+        token = payload.get("content", "")
+        if token:
+            printer.feed_token(token)
+
+    elif etype == StreamEventType.RUN_STARTED:
+        console.print(f"[dim]─" * 40 + "[/]")
 
     elif etype == StreamEventType.TOOL_START:
         # Pause live markdown, print tool line, resume on next token
         name = payload.get("tool_name", "?")
         args = _truncate(payload.get("args_json", ""), 100)
-        printer.interrupt_for_tool(f"  [cyan]▶ {name}[/] [dim]{args}[/]")
+        printer.start_tool(name)
+        printer.interrupt_for_tool(f"  [bold #58a6ff]▶ {name}[/] [dim]{args}[/]")
 
     elif etype == StreamEventType.TOOL_RESULT:
         name = payload.get("tool_name", "?")
         result = _truncate(payload.get("result_summary", ""), 160)
-        printer.interrupt_for_tool(f"  [green]✓ {name}[/] [dim]{result}[/]")
+        elapsed = printer.end_tool(name)
+        time_str = f" [dim]({elapsed:.1f}s)[/]" if elapsed > 0.1 else ""
+        printer.interrupt_for_tool(f"  [bold #3fb950]✓ {name}[/] [dim]{result}[/]{time_str}")
 
     elif etype == StreamEventType.TOOL_ERROR:
         name = payload.get("tool_name", "?")
         error = _truncate(payload.get("error_text", ""), 160)
-        printer.interrupt_for_tool(f"  [red]✗ {name}[/] {error}")
+        elapsed = printer.end_tool(name)
+        time_str = f" [dim]({elapsed:.1f}s)[/]" if elapsed > 0.1 else ""
+        printer.interrupt_for_tool(f"  [bold red]✗ {name}[/] [red]{error}[/]{time_str}")
 
     elif etype == StreamEventType.SUBAGENT_START:
         name = payload.get("subagent", "")
         if name:
+            description = payload.get("description", "")
+            printer.start_subagent(name)
             printer.interrupt_for_tool(
-                f"\n[bold cyan]┌─ {name.upper()} ─────────────────────────[/]"
+                f"\n[bold #58a6ff]╭─ {name.upper()}[/] [dim]{description}[/]"
             )
 
     elif etype == StreamEventType.SUBAGENT_COMPLETE:
         name = payload.get("subagent", "")
         if name:
+            elapsed = printer.end_subagent(name)
+            time_str = f" [dim]({elapsed:.1f}s)[/]" if elapsed > 0.1 else ""
             printer.interrupt_for_tool(
-                f"[green]└─ {name} complete ─────────────────[/]\n"
+                f"[bold #3fb950]╰─ {name} complete[/]{time_str}\n"
             )
 
     elif etype == StreamEventType.RUN_FAILED:

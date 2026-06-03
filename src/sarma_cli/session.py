@@ -1,7 +1,7 @@
 """Session lifecycle — wraps IDE agent runtime for CLI use.
 
 Workflow-aware: reads the current workflow from the registry on each turn
-to determine execution mode (chat vs audit pipeline).
+to determine execution mode (ruflo vs audit pipeline).
 """
 
 from __future__ import annotations
@@ -12,22 +12,18 @@ from typing import Any, AsyncIterator
 from sarma_cli.engine.agent_factory import AgentFactory
 from sarma_cli.engine.agent_runner import AgentRunner
 from sarma_cli.engine.mcp_pool import McpClientPool
-from sarma_cli.engine.models import ChatMessage, StreamEvent, resolve_skill
-from sarma_cli.engine.prompts import build_system_prompt
+from sarma_cli.engine.models import ConversationMessage, StreamEvent
 from sarma_cli.engine.enums import StreamEventType
+from sarma_cli.context.compaction import (
+    STRUCTURED_MEMORY_PROMPT,
+    ContextCompactor,
+    ContextWindowPolicy,
+    estimate_static_prompt_tokens,
+)
 
 from sarma_cli.config import CliConfig
+from sarma_cli.runtime.resolver import RuntimePolicyResolver
 from sarma_cli.store import Store
-
-_AUDIT_SKILL_DICT: dict[str, Any] = {
-    "id": None,
-    "name": "vuln-audit-workflow",
-    "system_prompt_template": "",
-    "tool_allowlist_json": None,
-    "tool_denylist_json": None,
-    "model_override": None,
-    "temperature_override": None,
-}
 
 
 class Session:
@@ -43,8 +39,9 @@ class Session:
         self._store = store
         self._pool = McpClientPool()
         self._factory = AgentFactory(self._pool)
+        self._resolver = RuntimePolicyResolver(config)
         self._conversation_id: str = ""
-        self._history: list[ChatMessage] = []
+        self._history: list[ConversationMessage] = []
         self._graph_state: dict[str, Any] = {
             "current_stage": "",
             "completed": set(),
@@ -52,6 +49,8 @@ class Session:
             "gapfill_loops": 0,
             "feedback_loops": 0,
         }
+        self._compact_trigger_ratio = 0.90
+        self._compact_target_ratio = 0.55
 
     @property
     def graph_state(self) -> dict[str, Any]:
@@ -69,12 +68,30 @@ class Session:
     def tool_count(self) -> int:
         return len(self._pool.tools)
 
+    async def ensure_mcp_connected(self, workflow: str) -> None:
+        """Connect the runtime MCP pool for the given workflow without building an agent."""
+        run_plan = self._resolver.resolve(workflow)
+        server_configs = {
+            server.name: server.to_langchain_config()
+            for server in run_plan.enabled_servers
+        }
+        await self._pool.connect(server_configs)
+
+    async def restart_runtime(self) -> None:
+        """Rebuild runtime resources while preserving conversation history."""
+        await self._pool.disconnect()
+        self._pool = McpClientPool()
+        self._factory = AgentFactory(self._pool)
+        self._resolver = RuntimePolicyResolver(self._config)
+        self._reset_graph_state()
+
     def new_conversation(self, title: str = "") -> str:
         from sarma_cli.workflows import get_registry
         mode = get_registry().current_name()
+        provider = self._resolver.provider_for(mode or "ruflo")
         self._conversation_id = self._store.create_conversation(
             title=title or f"{mode.title()} session",
-            model_name=self._config.provider.model_name,
+            model_name=provider.model_name,
         )
         self._history.clear()
         self._reset_graph_state()
@@ -86,7 +103,7 @@ class Session:
             return False
         self._conversation_id = cid
         self._history = [
-            ChatMessage(
+            ConversationMessage(
                 id=m["id"],
                 conversation_id=cid,
                 turn_id=m["turn_id"],
@@ -98,6 +115,40 @@ class Session:
         ]
         return True
 
+    async def compact_context(
+        self,
+        *,
+        force: bool = True,
+        workflow: str = "ruflo",
+        upcoming_text: str = "",
+        system_prompt: str = "",
+    ) -> bool:
+        """Compact history into structured memory near the context limit."""
+        compactor = self._compactor_for_workflow(
+            workflow,
+            system_prompt=system_prompt,
+        )
+        changed, new_history, memory = await compactor.compact(
+            self._history,
+            lambda messages: self._summarize_messages(messages, workflow=workflow),
+            conversation_id=self._conversation_id,
+            upcoming_text=upcoming_text,
+            force=force,
+        )
+        if not changed:
+            return False
+
+        source_count = len(self._history) - (len(new_history) - 1)
+        self._history = new_history
+        if self._conversation_id:
+            self._store.save_memory_artifact(
+                self._conversation_id,
+                memory,
+                source_count=max(source_count, 0),
+            )
+            self._store.replace_messages(self._conversation_id, self._history)
+        return True
+
     async def run_turn(self, user_message: str) -> AsyncIterator[StreamEvent]:
         """Execute one turn, yielding StreamEvents.
 
@@ -106,32 +157,28 @@ class Session:
         """
         from sarma_cli.workflows import get_registry
 
-        if not self._conversation_id:
-            self.new_conversation(title=user_message[:60])
-
         # Determine mode from current workflow
         registry = get_registry()
         current_wf = registry.current()
-        mode = current_wf.name if current_wf else "chat"
+        mode = current_wf.name if current_wf else "ruflo"
+        if not self._conversation_id:
+            self.new_conversation(title=user_message[:60])
 
         turn_id = uuid.uuid4().hex[:12]
+        run_plan = self._resolver.resolve(mode)
 
-        # Audit modes use the built-in audit skill; chat mode loads any
-        # skills configured in [agent].skills (model + MCP servers come from
-        # the provider/agent config).
-        if mode in ("audit", "audit-slim"):
-            skill_dict = _AUDIT_SKILL_DICT
-        else:
-            from sarma_cli.skills import load_skills
-            skill_dict = load_skills(self._config.agent.skills)
-        skill = resolve_skill(skill_dict)
-        system_prompt = build_system_prompt(skill=skill, mode=mode)
+        await self.compact_context(
+            force=False,
+            workflow=mode,
+            upcoming_text=user_message,
+            system_prompt=run_plan.system_prompt,
+        )
 
         # Persist user message
         self._store.save_message(
             self._conversation_id, turn_id, "user", user_message
         )
-        self._history.append(ChatMessage(
+        self._history.append(ConversationMessage(
             role="user", content=user_message,
             conversation_id=self._conversation_id, turn_id=turn_id,
         ))
@@ -139,14 +186,17 @@ class Session:
         runner = AgentRunner(
             factory=self._factory,
             pool=self._pool,
-            provider_dict=self._config.provider_dict,
-            servers_list=self._config.agent_mcp_server_dicts,
-            skill_dict=skill_dict,
+            provider=run_plan.provider,
+            enabled_servers=run_plan.enabled_servers,
+            skill=run_plan.skill,
             history=self._history,
-            system_prompt=system_prompt,
+            system_prompt=run_plan.system_prompt,
             conversation_id=self._conversation_id,
             turn_id=turn_id,
             mode=mode,
+            subagent_providers=run_plan.subagent_providers,
+            subagent_mcp_allow=run_plan.subagent_mcp_allow,
+            subagent_skills=run_plan.subagent_skills,
         )
 
         async for event in runner.run(user_message):
@@ -161,7 +211,7 @@ class Session:
                 runner.assistant_content,
                 reasoning=runner.reasoning_content or None,
             )
-            self._history.append(ChatMessage(
+            self._history.append(ConversationMessage(
                 role="assistant", content=runner.assistant_content,
                 conversation_id=self._conversation_id, turn_id=turn_id,
                 reasoning_content=runner.reasoning_content or None,
@@ -181,6 +231,81 @@ class Session:
             "gapfill_loops": 0,
             "feedback_loops": 0,
         }
+
+    def _should_compact(self, budget: int, *, upcoming_text: str = "") -> bool:
+        compactor = ContextCompactor(ContextWindowPolicy(
+            max_context_tokens=budget,
+            trigger_ratio=self._compact_trigger_ratio,
+            raw_tail_ratio=self._compact_target_ratio,
+        ))
+        return compactor.plan(
+            self._history,
+            upcoming_text=upcoming_text,
+        ).should_compact
+
+    def _context_budget(self, workflow: str) -> int:
+        provider = self._resolver.provider_for(workflow)
+        return max(int(provider.max_context_tokens or 128_000), 1)
+
+    def _split_for_compaction(
+        self,
+        budget: int,
+    ) -> tuple[list[ConversationMessage], list[ConversationMessage]]:
+        return ContextCompactor(ContextWindowPolicy(
+            max_context_tokens=budget,
+            trigger_ratio=self._compact_trigger_ratio,
+            raw_tail_ratio=self._compact_target_ratio,
+        )).split_raw_tail(self._history)
+
+    def _estimate_history_tokens(self, messages: list[ConversationMessage]) -> int:
+        return ContextCompactor(ContextWindowPolicy(
+            max_context_tokens=128_000,
+        )).estimate_history_tokens(messages)
+
+    @staticmethod
+    def _estimate_message_tokens(message: ConversationMessage) -> int:
+        return ContextCompactor.estimate_message_tokens(message)
+
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        return ContextCompactor.estimate_text_tokens(text)
+
+    def _compactor_for_workflow(
+        self,
+        workflow: str,
+        *,
+        system_prompt: str = "",
+    ) -> ContextCompactor:
+        return ContextCompactor(ContextWindowPolicy(
+            max_context_tokens=self._context_budget(workflow),
+            trigger_ratio=self._compact_trigger_ratio,
+            raw_tail_ratio=self._compact_target_ratio,
+            static_prompt_tokens=estimate_static_prompt_tokens(
+                system_prompt,
+                self.tool_count,
+            ),
+        ))
+
+    async def _summarize_messages(
+        self,
+        messages: list[ConversationMessage],
+        *,
+        workflow: str = "ruflo",
+    ) -> str:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        provider = self._resolver.provider_for(workflow)
+        model = self._factory._init_model(provider, None)
+        transcript = "\n\n".join(
+            f"{message.role.upper()}: {message.content}"
+            for message in messages
+            if message.content
+        )
+        result = await model.ainvoke([
+            SystemMessage(content=STRUCTURED_MEMORY_PROMPT),
+            HumanMessage(content=transcript),
+        ])
+        return str(getattr(result, "content", "") or "")
 
     def _track_graph_progress(self, event: StreamEvent) -> None:
         """Update graph state from subagent lifecycle events (audit mode only)."""

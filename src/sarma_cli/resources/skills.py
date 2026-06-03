@@ -1,19 +1,9 @@
-"""Skill loading — read skill directories into skill-config dicts.
+"""Skill loading for installed SKILL.md directories.
 
 A skill is a directory under ``~/.sarma/skills/<name>`` (global) or
-``./.sarma/skills/<name>`` (local) containing a ``SKILL.md`` file. The file
-may start with an optional YAML-ish frontmatter block delimited by ``---``:
-
-    ---
-    model: gpt-4o
-    temperature: 0.3
-    tools_allow: ["decompile", "disasm"]
-    tools_deny: []
-    ---
-    <markdown body used as the system-prompt overlay>
-
-Only simple scalar / inline-list frontmatter is supported (no PyYAML
-dependency). The body becomes ``system_prompt_template``.
+``./.sarma/skills/<name>`` (workspace) containing a ``SKILL.md`` file. This
+module only discovers and parses skill resources; runtime prompt/tool policy is
+resolved in ``runtime/resolver.py``.
 """
 
 from __future__ import annotations
@@ -31,6 +21,21 @@ def _skill_dir(name: str) -> Any:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def list_available_skills() -> list[str]:
+    """Return available skill names, with local skills taking precedence."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for base in (paths.local_skills_dir(), paths.global_skills_dir()):
+        if not base.exists():
+            continue
+        for candidate in sorted(base.iterdir(), key=lambda p: p.name):
+            if candidate.is_dir() and (candidate / "SKILL.md").is_file():
+                if candidate.name not in seen:
+                    seen.add(candidate.name)
+                    found.append(candidate.name)
+    return found
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -69,11 +74,7 @@ def _parse_scalar(raw: str) -> Any:
 
 
 def load_skill(name: str) -> dict[str, Any] | None:
-    """Load a skill directory by name into a skill-config dict.
-
-    Returns a dict matching what ``resolve_skill`` expects, or ``None`` if the
-    skill directory or its ``SKILL.md`` is missing.
-    """
+    """Load a skill directory by name into a runtime skill-config dict."""
     skill_dir = _skill_dir(name)
     if skill_dir is None:
         return None
@@ -89,20 +90,19 @@ def load_skill(name: str) -> dict[str, Any] | None:
         "id": None,
         "name": name,
         "system_prompt_template": body.strip(),
-        "tool_allowlist_json": json.dumps(allow) if isinstance(allow, list) and allow else None,
-        "tool_denylist_json": json.dumps(deny) if isinstance(deny, list) and deny else None,
+        "tool_allowlist_json": (
+            json.dumps(allow) if isinstance(allow, list) and allow else None
+        ),
+        "tool_denylist_json": (
+            json.dumps(deny) if isinstance(deny, list) and deny else None
+        ),
         "model_override": meta.get("model") or None,
         "temperature_override": meta.get("temperature"),
     }
 
 
 def load_skills(names: list[str]) -> dict[str, Any] | None:
-    """Load and merge multiple skills into one combined skill-config dict.
-
-    Prompt overlays are concatenated; tool allow/deny lists are unioned; the
-    first skill that specifies a model/temperature wins. Returns ``None`` if no
-    named skill could be loaded.
-    """
+    """Load and merge multiple skills into one combined skill-config dict."""
     loaded = [s for s in (load_skill(n) for n in names) if s]
     if not loaded:
         return None
@@ -114,24 +114,22 @@ def load_skills(names: list[str]) -> dict[str, Any] | None:
     deny: set[str] = set()
     model: Any = None
     temp: Any = None
-    for s in loaded:
-        if s["system_prompt_template"]:
-            prompts.append(s["system_prompt_template"])
-        if s["tool_allowlist_json"]:
-            allow.update(json.loads(s["tool_allowlist_json"]))
-        if s["tool_denylist_json"]:
-            deny.update(json.loads(s["tool_denylist_json"]))
-        model = model or s["model_override"]
-        temp = temp if temp is not None else s["temperature_override"]
+    for skill in loaded:
+        if skill["system_prompt_template"]:
+            prompts.append(skill["system_prompt_template"])
+        if skill["tool_allowlist_json"]:
+            allow.update(json.loads(skill["tool_allowlist_json"]))
+        if skill["tool_denylist_json"]:
+            deny.update(json.loads(skill["tool_denylist_json"]))
+        model = model or skill["model_override"]
+        temp = temp if temp is not None else skill["temperature_override"]
 
     return {
         "id": None,
-        "name": "+".join(s["name"] for s in loaded),
+        "name": "+".join(skill["name"] for skill in loaded),
         "system_prompt_template": "\n\n---\n\n".join(prompts),
         "tool_allowlist_json": json.dumps(sorted(allow)) if allow else None,
         "tool_denylist_json": json.dumps(sorted(deny)) if deny else None,
         "model_override": model,
         "temperature_override": temp,
     }
-
-

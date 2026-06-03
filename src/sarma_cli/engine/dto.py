@@ -57,7 +57,8 @@ class McpServerDTO:
     def to_langchain_config(self) -> dict[str, Any]:
         import json
 
-        config: dict[str, Any] = {"transport": self.transport}
+        transport = "streamable_http" if self.transport == "http" else self.transport
+        config: dict[str, Any] = {"transport": transport}
         if self.transport == "stdio":
             config["command"] = self.command
             if self.args:
@@ -81,7 +82,7 @@ class McpServerDTO:
                     config["headers"] = json.loads(self.headers)
                 except (json.JSONDecodeError, TypeError):
                     pass
-            if self.timeout and self.transport in ("http", "sse"):
+            if self.timeout and self.transport in ("http", "streamable_http", "sse"):
                 config["timeout"] = self.timeout
             if self.sse_read_timeout and self.transport == "sse":
                 config["sse_read_timeout"] = self.sse_read_timeout
@@ -102,58 +103,4 @@ class McpServerDTO:
             "headers": self.headers,
             "timeout": self.timeout,
             "sse_read_timeout": self.sse_read_timeout,
-        }
-
-
-@dataclass
-class SkillDTO:
-    id: int | None
-    name: str
-    description: str
-    enabled: bool
-    version: str
-    file_path: str
-    install_dir: str
-    installed_at: str
-    system_prompt_template: str
-    tool_allowlist_json: str | None
-    tool_denylist_json: str | None
-    model_override: str
-    temperature_override: float | None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "enabled": self.enabled,
-            "version": self.version,
-            "file_path": self.file_path,
-            "install_dir": self.install_dir,
-            "installed_at": self.installed_at,
-            "system_prompt_template": self.system_prompt_template,
-            "tool_allowlist_json": self.tool_allowlist_json,
-            "tool_denylist_json": self.tool_denylist_json,
-            "model_override": self.model_override,
-            "temperature_override": self.temperature_override,
-        }
-
-
-@dataclass
-class AgentModelAssignmentDTO:
-    id: int | None
-    agent_name: str
-    provider_id: int | None
-    provider_name: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "agent_name": self.agent_name,
-            "provider_id": self.provider_id,
-            "provider_name": self.provider_name,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
         }

@@ -46,8 +46,19 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     FOREIGN KEY (conversation_id) REFERENCES conversations(id)
 );
 
+CREATE TABLE IF NOT EXISTS memory_artifacts (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    kind            TEXT NOT NULL DEFAULT 'structured_context',
+    content         TEXT NOT NULL DEFAULT '',
+    source_count    INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_tools_conv ON tool_executions(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_memory_conv ON memory_artifacts(conversation_id);
 """
 
 
@@ -62,6 +73,8 @@ def _uid() -> str:
 
 class Store:
     """SQLite persistence for CLI audit sessions."""
+
+    _CONVERSATION_UPDATE_FIELDS = {"title", "model_name", "status", "updated_at"}
 
     def __init__(self) -> None:
         db = paths.db_path()
@@ -85,6 +98,9 @@ class Store:
 
     def update_conversation(self, cid: str, **kw: Any) -> None:
         kw["updated_at"] = _now_iso()
+        invalid = set(kw) - self._CONVERSATION_UPDATE_FIELDS
+        if invalid:
+            raise ValueError(f"Invalid conversation update field(s): {', '.join(sorted(invalid))}")
         sets = ", ".join(f"{k}=?" for k in kw)
         self._conn.execute(
             f"UPDATE conversations SET {sets} WHERE id=?",
@@ -118,10 +134,77 @@ class Store:
         self._conn.commit()
         return mid
 
+    def replace_messages(
+        self,
+        conversation_id: str,
+        messages: list[Any],
+    ) -> None:
+        """Replace persisted replay history after context compaction."""
+        now = _now_iso()
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM messages WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            for message in messages:
+                self._conn.execute(
+                    "INSERT INTO messages "
+                    "(id, conversation_id, turn_id, role, content, tool_name, "
+                    "reasoning, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        getattr(message, "id", "") or _uid(),
+                        conversation_id,
+                        getattr(message, "turn_id", "") or "",
+                        getattr(message, "role", "") or "",
+                        getattr(message, "content", "") or "",
+                        getattr(message, "tool_name", None),
+                        getattr(message, "reasoning_content", None),
+                        getattr(message, "created_at", "") or now,
+                    ),
+                )
+
     def load_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at",
             (conversation_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_memory_artifact(
+        self,
+        conversation_id: str,
+        content: str,
+        *,
+        kind: str = "structured_context",
+        source_count: int = 0,
+    ) -> str:
+        mid = _uid()
+        self._conn.execute(
+            "INSERT INTO memory_artifacts "
+            "(id, conversation_id, kind, content, source_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                mid,
+                conversation_id,
+                kind,
+                content,
+                int(source_count),
+                _now_iso(),
+            ),
+        )
+        self._conn.commit()
+        return mid
+
+    def load_memory_artifacts(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM memory_artifacts WHERE conversation_id=? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (conversation_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 

@@ -23,6 +23,7 @@ from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS, AUDIT_SUBAGENT_ORDER
+from sarma_cli.engine.models import ResolvedSkill
 
 DEFAULT_MAX_GAPFILL = 3
 DEFAULT_MAX_FEEDBACK = 2
@@ -44,8 +45,53 @@ def _filter_tools_by_prefix(
     """Filter tools whose name starts with any of the given prefixes."""
     if not prefixes or not all_tools:
         return list(all_tools)
-    matched = [t for t in all_tools if any(t.name.startswith(p) for p in prefixes)]
-    return matched if matched else list(all_tools)
+    matched = [t for t in all_tools if any(_tool_name_matches(t.name, p) for p in prefixes)]
+    return matched
+
+
+def _tool_name_matches(tool_name: str, prefix: str) -> bool:
+    return (
+        tool_name.startswith(prefix)
+        or f"_{prefix}" in tool_name
+        or f"__{prefix}" in tool_name
+        or f".{prefix}" in tool_name
+        or f":{prefix}" in tool_name
+    )
+
+
+def _filter_tools_by_mcp(
+    all_tools: list[Any], allowed_servers: list[str] | None
+) -> list[Any]:
+    if allowed_servers is None:
+        return list(all_tools)
+    if not allowed_servers:
+        return []
+    result = []
+    for tool in all_tools:
+        name = getattr(tool, "name", "")
+        if any(
+            name == server
+            or name.startswith(f"{server}_")
+            or name.startswith(f"{server}__")
+            or name.startswith(f"{server}.")
+            or name.startswith(f"{server}:")
+            for server in allowed_servers
+        ):
+            result.append(tool)
+    return result
+
+
+def _filter_tools_by_skill(
+    all_tools: list[Any], skill: ResolvedSkill | None
+) -> list[Any]:
+    if skill is None:
+        return list(all_tools)
+    result = list(all_tools)
+    if skill.tool_allowlist is not None:
+        result = [t for t in result if t.name in skill.tool_allowlist]
+    if skill.tool_denylist is not None:
+        result = [t for t in result if t.name not in skill.tool_denylist]
+    return result
 
 
 def _build_context(stage_name: str, stage_outputs: dict[str, str]) -> str:
@@ -66,6 +112,8 @@ def _make_subagent_node(
     default_model: Any,
     all_tools: list[Any],
     subagent_models: dict[str, Any] | None = None,
+    allowed_mcp_servers: list[str] | None = None,
+    skill: ResolvedSkill | None = None,
 ):
     """Create an async node function that runs a react agent for one stage.
 
@@ -80,8 +128,13 @@ def _make_subagent_node(
         or spec.get("model")
         or default_model
     )
-    tools = _filter_tools_by_prefix(all_tools, spec.get("_tool_prefixes"))
-    agent = create_react_agent(model, tools, prompt=spec["system_prompt"])
+    tools = _filter_tools_by_mcp(all_tools, allowed_mcp_servers)
+    tools = _filter_tools_by_prefix(tools, spec.get("_tool_prefixes"))
+    tools = _filter_tools_by_skill(tools, skill)
+    prompt = spec["system_prompt"]
+    if skill and skill.system_prompt_suffix:
+        prompt = f"{prompt}\n\n{skill.system_prompt_suffix}"
+    agent = create_react_agent(model, tools, prompt=prompt)
 
     async def node(state: AuditState) -> dict[str, Any]:
         writer = get_stream_writer()
@@ -210,6 +263,8 @@ def build_audit_graph(
     system_prompt: str = "",
     subagent_specs: list[dict[str, Any]] | None = None,
     subagent_models: dict[str, Any] | None = None,
+    subagent_mcp_allow: dict[str, list[str] | None] | None = None,
+    subagent_skills: dict[str, ResolvedSkill | None] | None = None,
 ) -> Any:
     """Build and compile the audit pipeline StateGraph.
 
@@ -232,7 +287,13 @@ def build_audit_graph(
     for name in AUDIT_SUBAGENT_ORDER:
         spec = spec_map[name]
         node_fn = _make_subagent_node(
-            name, spec, model, tools, subagent_models
+            name,
+            spec,
+            model,
+            tools,
+            subagent_models,
+            (subagent_mcp_allow or {}).get(name),
+            (subagent_skills or {}).get(name),
         )
         builder.add_node(name, node_fn)
 

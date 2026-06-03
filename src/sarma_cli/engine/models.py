@@ -1,4 +1,4 @@
-"""Chat data models."""
+"""Runtime conversation data models."""
 
 from __future__ import annotations
 
@@ -20,41 +20,12 @@ def _now_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Conversation
+# ConversationMessage
 # ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
-class Conversation:
-    id: str = field(default_factory=_uid)
-    title: str = ""
-    provider_id: int | None = None
-    model_name_snapshot: str = ""
-    skill_id: int | None = None
-    system_prompt_override: str | None = None
-    mode: str = "audit"  # chat | audit
-    status: str = "idle"  # idle | running | failed
-    created_at: str = field(default_factory=_now_iso)
-    updated_at: str = field(default_factory=_now_iso)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> Conversation:
-        if not data:
-            return cls()
-        allowed = {f.name for f in cls.__dataclass_fields__.values()}
-        return cls(**{k: v for k, v in data.items() if k in allowed})
-
-
-# ---------------------------------------------------------------------------
-# ChatMessage
-# ---------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class ChatMessage:
+class ConversationMessage:
     id: str = field(default_factory=_uid)
     conversation_id: str = ""
     turn_id: str = ""
@@ -70,7 +41,7 @@ class ChatMessage:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> ChatMessage:
+    def from_dict(cls, data: dict[str, Any] | None) -> ConversationMessage:
         if not data:
             return cls()
         allowed = {f.name for f in cls.__dataclass_fields__.values()}
@@ -139,10 +110,6 @@ class ChatMessage:
         if content:
             return f"Previous tool call: {tool_label}\nResult: {content}"
         return f"Previous tool call: {tool_label}"
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -229,8 +196,11 @@ class AgentRunConfig:
     provider: Any  # ModelProvider
     skill: ResolvedSkill | None
     enabled_servers: list[Any]  # list[McpServerEntry]
-    message_history: list[ChatMessage]
+    message_history: list[ConversationMessage]
     user_message: str
     system_prompt: str
-    mode: str = "audit"  # chat | audit
+    mode: str = "ruflo"  # ruflo | audit | audit-slim
     max_steps: int = 100_000
+    subagent_providers: dict[str, Any] = field(default_factory=dict)
+    subagent_mcp_allow: dict[str, list[str] | None] = field(default_factory=dict)
+    subagent_skills: dict[str, ResolvedSkill | None] = field(default_factory=dict)

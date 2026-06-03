@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -200,6 +201,34 @@ _MODEL_BUILDERS: dict[str, Any] = {
 }
 
 
+def _provider_key(provider: Any) -> dict[str, Any]:
+    if hasattr(provider, "to_dict"):
+        return provider.to_dict()
+    return {
+        "name": getattr(provider, "name", ""),
+        "model_name": getattr(provider, "model_name", ""),
+        "api_mode": getattr(provider, "api_mode", ""),
+        "api_key": getattr(provider, "api_key", ""),
+        "base_url": getattr(provider, "base_url", ""),
+        "temperature": getattr(provider, "temperature", None),
+        "top_p": getattr(provider, "top_p", None),
+    }
+
+
+def _skill_key(skill: ResolvedSkill | None) -> dict[str, Any] | None:
+    if skill is None:
+        return None
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "system_prompt_suffix": skill.system_prompt_suffix,
+        "tool_allowlist": None if skill.tool_allowlist is None else sorted(skill.tool_allowlist),
+        "tool_denylist": None if skill.tool_denylist is None else sorted(skill.tool_denylist),
+        "preferred_model_name": skill.preferred_model_name,
+        "temperature_override": skill.temperature_override,
+    }
+
+
 class AgentFactory:
     """Builds a LangGraph agent from runtime configuration."""
 
@@ -208,6 +237,8 @@ class AgentFactory:
     ) -> None:
         self._pool = pool
         self._workspace_path = workspace_path
+        self._agent_cache: dict[str, tuple[Any, list[Any]]] = {}
+        self._agent_cache_limit = 8
 
     async def build(
         self, config: AgentRunConfig
@@ -249,6 +280,18 @@ class AgentFactory:
                 "out). Agent will answer from its own knowledge."
             )
 
+        cache_key = self._agent_cache_key(config, server_configs, tools)
+        cached = self._agent_cache.get(cache_key)
+        if cached is not None:
+            logger.info(
+                "Agent cache hit: mode=%s model=%s tools=%d skill=%s",
+                config.mode,
+                provider.model_name,
+                len(tools),
+                config.skill.name if config.skill else "none",
+            )
+            return cached
+
         # 4. Initialize LLM
         try:
             model = self._init_model(provider, config.skill)
@@ -257,42 +300,10 @@ class AgentFactory:
                 f"Failed to initialize model: {exc}"
             ) from exc
 
-        # 5. Build agent — audit modes use a multi-stage pipeline,
-        #    chat mode uses a simple ReAct agent with full tool access.
+        # 5. Build agent. Audit modes use fixed pipelines; Ruflo uses a
+        #    primary ReAct agent with a controlled subagent delegation tool.
         try:
-            if config.mode in ("audit", "audit-slim"):
-                subagent_models = self._load_subagent_models(provider)
-                subagent_models.pop("orchestrator", None)
-
-                if config.mode == "audit-slim":
-                    from sarma_cli.engine.audit_slim_graph import build_audit_slim_graph
-                    from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENTS
-
-                    agent = build_audit_slim_graph(
-                        model=model,
-                        tools=tools,
-                        system_prompt=config.system_prompt or "",
-                        subagent_specs=AUDIT_SLIM_SUBAGENTS,
-                        subagent_models=subagent_models or None,
-                    )
-                else:
-                    from sarma_cli.engine.audit_graph import build_audit_graph
-                    from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS
-
-                    agent = build_audit_graph(
-                        model=model,
-                        tools=tools,
-                        system_prompt=config.system_prompt or "",
-                        subagent_specs=AUDIT_SUBAGENTS,
-                        subagent_models=subagent_models or None,
-                    )
-            else:
-                from langgraph.prebuilt import create_react_agent
-
-                system_prompt = config.system_prompt or ""
-                agent = create_react_agent(
-                    model, tools, prompt=system_prompt
-                )
+            agent = self._create_agent(config, model, tools)
         except Exception as exc:
             raise AgentBuildError(
                 f"Failed to create agent: {exc}"
@@ -305,10 +316,95 @@ class AgentFactory:
             config.skill.name if config.skill else "none",
         )
 
+        self._agent_cache[cache_key] = (agent, tools)
+        if len(self._agent_cache) > self._agent_cache_limit:
+            self._agent_cache.pop(next(iter(self._agent_cache)))
         return agent, tools
 
+    def _create_agent(
+        self,
+        config: AgentRunConfig,
+        model: Any,
+        tools: list[Any],
+    ) -> Any:
+        if config.mode in ("audit", "audit-slim"):
+            subagent_models = self._load_subagent_models(config.subagent_providers)
+            subagent_models.pop("orchestrator", None)
+
+            if config.mode == "audit-slim":
+                from sarma_cli.engine.audit_slim_graph import build_audit_slim_graph
+                from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENTS
+
+                return build_audit_slim_graph(
+                    model=model,
+                    tools=tools,
+                    system_prompt=config.system_prompt or "",
+                    subagent_specs=AUDIT_SLIM_SUBAGENTS,
+                    subagent_models=subagent_models or None,
+                    subagent_mcp_allow=config.subagent_mcp_allow,
+                    subagent_skills=config.subagent_skills,
+                )
+
+            from sarma_cli.engine.audit_graph import build_audit_graph
+            from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS
+
+            return build_audit_graph(
+                model=model,
+                tools=tools,
+                system_prompt=config.system_prompt or "",
+                subagent_specs=AUDIT_SUBAGENTS,
+                subagent_models=subagent_models or None,
+                subagent_mcp_allow=config.subagent_mcp_allow,
+                subagent_skills=config.subagent_skills,
+            )
+
+        if config.mode == "ruflo":
+            from langgraph.prebuilt import create_react_agent
+            from sarma_cli.engine.ruflo import build_delegate_tool, build_ruflo_prompt
+
+            system_prompt = build_ruflo_prompt(config.system_prompt or "")
+            ruflo_tools = [*tools, build_delegate_tool(model, tools)]
+            return create_react_agent(
+                model, ruflo_tools, prompt=system_prompt
+            )
+
+        from langgraph.prebuilt import create_react_agent
+
+        system_prompt = config.system_prompt or ""
+        return create_react_agent(
+            model, tools, prompt=system_prompt
+        )
+
+    def _agent_cache_key(
+        self,
+        config: AgentRunConfig,
+        server_configs: dict[str, dict[str, Any]],
+        tools: list[Any],
+    ) -> str:
+        data = {
+            "mode": config.mode,
+            "provider": _provider_key(config.provider),
+            "skill": _skill_key(config.skill),
+            "servers": server_configs,
+            "tools": [getattr(tool, "name", repr(tool)) for tool in tools],
+            "system_prompt": config.system_prompt or "",
+            "subagent_providers": {
+                name: _provider_key(provider)
+                for name, provider in sorted(config.subagent_providers.items())
+            },
+            "subagent_mcp_allow": {
+                name: None if allow is None else sorted(allow)
+                for name, allow in sorted(config.subagent_mcp_allow.items())
+            },
+            "subagent_skills": {
+                name: _skill_key(skill)
+                for name, skill in sorted(config.subagent_skills.items())
+            },
+        }
+        return json.dumps(data, sort_keys=True, default=str)
+
     def _init_model(self, provider: Any, skill: ResolvedSkill | None) -> Any:
-        """Initialize a langchain chat model directly based on api_mode."""
+        """Initialize a LangChain language model based on api_mode."""
         api_mode = provider.api_mode
         builder = _MODEL_BUILDERS.get(api_mode)
         if builder is None:
@@ -348,7 +444,8 @@ class AgentFactory:
             denylist=skill.tool_denylist,
         )
 
-    def _load_subagent_models(self, default_provider: Any) -> dict[str, Any]:
-        # Per-agent model overrides were stored in the desktop IDE database.
-        # That database no longer exists — all subagents use the default model.
-        return {}
+    def _load_subagent_models(self, providers: dict[str, Any]) -> dict[str, Any]:
+        models: dict[str, Any] = {}
+        for name, provider in providers.items():
+            models[name] = self._init_model(provider, None)
+        return models

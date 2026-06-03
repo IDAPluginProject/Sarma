@@ -24,6 +24,8 @@ def build_audit_slim_graph(
     system_prompt: str = "",
     subagent_specs: list[dict[str, Any]] | None = None,
     subagent_models: dict[str, Any] | None = None,
+    subagent_mcp_allow: dict[str, list[str] | None] | None = None,
+    subagent_skills: dict[str, object] | None = None,
 ) -> Any:
     """Build and compile the linear audit-slim StateGraph.
 
@@ -43,7 +45,13 @@ def build_audit_slim_graph(
     builder = StateGraph(AuditState)
     for name in AUDIT_SLIM_SUBAGENT_ORDER:
         node_fn = _make_subagent_node(
-            name, spec_map[name], model, tools, subagent_models
+            name,
+            spec_map[name],
+            model,
+            tools,
+            subagent_models,
+            (subagent_mcp_allow or {}).get(name),
+            (subagent_skills or {}).get(name),
         )
         builder.add_node(name, node_fn)
 

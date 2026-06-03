@@ -1,17 +1,17 @@
-"""Chat-specific exceptions and error types."""
+"""Runtime exceptions and error types."""
 
 from __future__ import annotations
 
 
-class ChatError(Exception):
-    """Base exception for chat feature."""
+class SarmaRuntimeError(Exception):
+    """Base exception for Sarma runtime failures."""
 
 
-class ProviderNotConfiguredError(ChatError):
+class ProviderNotConfiguredError(SarmaRuntimeError):
     """No model provider is configured or the selected one is invalid."""
 
 
-class McpConnectionError(ChatError):
+class McpConnectionError(SarmaRuntimeError):
     """Failed to connect to an MCP server."""
 
     def __init__(self, server_name: str, detail: str = "") -> None:
@@ -22,11 +22,11 @@ class McpConnectionError(ChatError):
         super().__init__(msg)
 
 
-class AgentBuildError(ChatError):
+class AgentBuildError(SarmaRuntimeError):
     """Failed to construct the LangGraph agent."""
 
 
-class AgentRunError(ChatError):
+class AgentRunError(SarmaRuntimeError):
     """Agent execution failed during streaming."""
 
     def __init__(self, detail: str = "", *, recoverable: bool = True) -> None:
@@ -34,12 +34,16 @@ class AgentRunError(ChatError):
         super().__init__(detail)
 
 
-class PersistenceError(ChatError):
-    """Database operation for chat data failed."""
+class PersistenceError(SarmaRuntimeError):
+    """Database operation for runtime data failed."""
 
     def __init__(self, operation: str = "", detail: str = "") -> None:
         self.operation = operation
-        msg = f"Chat persistence failed: {operation}" if operation else "Chat persistence failed"
+        msg = (
+            f"Runtime persistence failed: {operation}"
+            if operation
+            else "Runtime persistence failed"
+        )
         if detail:
             msg += f" — {detail}"
         super().__init__(msg)

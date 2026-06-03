@@ -9,7 +9,7 @@ from rich.panel import Panel
 
 
 class Workflow(ABC):
-    """Base class for execution modes (chat, audit, etc.)."""
+    """Base class for execution modes (ruflo, audit, etc.)."""
 
     def __init__(self, name: str, description: str, is_default: bool = False) -> None:
         self.name = name
@@ -68,9 +68,9 @@ def init_workflows() -> None:
     registry = get_registry()
     if registry.count() > 0:
         return
-    from sarma_cli.workflows.chat import ChatWorkflow
+    from sarma_cli.workflows.ruflo import RufloWorkflow
     from sarma_cli.workflows.audit import AuditWorkflow
     from sarma_cli.workflows.audit_slim import AuditSlimWorkflow
-    registry.register(ChatWorkflow())
+    registry.register(RufloWorkflow())
     registry.register(AuditWorkflow())
     registry.register(AuditSlimWorkflow())

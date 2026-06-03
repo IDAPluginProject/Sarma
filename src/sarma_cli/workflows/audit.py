@@ -39,11 +39,11 @@ class AuditWorkflow(Workflow):
         text = Text()
         for i, stage in enumerate(main_line):
             if stage == failed:
-                row_style, icon = "bold red", "✗"
+                row_style, icon = "bold #f85149", "✗"
             elif stage == current:
-                row_style, icon = "bold cyan", "▶"
+                row_style, icon = "bold #58a6ff", "▶"
             elif stage in completed:
-                row_style, icon = "green", "✓"
+                row_style, icon = "#3fb950", "✓"
             else:
                 row_style, icon = "dim", "○"
 
@@ -62,15 +62,15 @@ class AuditWorkflow(Workflow):
             if stage == "validate":
                 gf_current = current == "gapfill"
                 gf_done = "gapfill" in completed
-                gf_style = "bold cyan" if gf_current else ("green" if gf_done else "dim")
+                gf_style = "bold #58a6ff" if gf_current else ("#3fb950" if gf_done else "dim")
                 gf_icon = "▶" if gf_current else ("✓" if gf_done else "○")
                 text.append(f"      └ {gf_icon} gapfill", style=gf_style)
                 text.append("  ↕ fills gaps → re-hunt / re-validate", style="dim")
                 if gapfill_loops > 0:
-                    text.append(f"  ×{gapfill_loops}", style="yellow")
+                    text.append(f"  ×{gapfill_loops}", style="#d29922")
                 text.append("\n")
 
             if stage == "feedback" and feedback_loops > 0:
-                text.append(f"           ↺ ×{feedback_loops} weak → back to Hunt\n", style="yellow")
+                text.append(f"           ↺ ×{feedback_loops} weak → back to Hunt\n", style="#d29922")
 
-        return Panel(text, title="[bold]Audit Harness[/]", border_style="blue", expand=False)
+        return Panel(text, title="[bold bright_blue]Audit Harness[/]", border_style="#58a6ff", expand=False)
