@@ -36,7 +36,10 @@ from sarma_cli.resources.plugins import (
     validate_mcp_server,
 )
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
-from sarma_cli.runtime.middleware import build_agent_middleware
+from sarma_cli.runtime.middleware import (
+    build_agent_middleware,
+    build_agent_middleware_for_model,
+)
 from sarma_cli.store import Store
 from sarma_cli.workflows import get_registry, init_workflows
 from sarma_cli.engine.ruflo import SUBAGENT_RESULT_TEMPLATE, build_ruflo_prompt
@@ -618,15 +621,71 @@ def test_ruflo_prompt_requires_compact_subagent_results() -> None:
     assert "hidden chain-of-thought" in SUBAGENT_RESULT_TEMPLATE
 
 
-def test_default_agent_middleware_uses_virtual_filesystem_state() -> None:
-    from deepagents.backends import StateBackend
+def test_default_agent_middleware_uses_current_workspace_filesystem(
+    monkeypatch,
+) -> None:
+    from deepagents.backends import FilesystemBackend
     from deepagents.middleware import FilesystemMiddleware
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware.shell_tool import ShellToolMiddleware
 
-    middleware = build_agent_middleware()
+    workspace = Path("build/test-default-agent-middleware").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    try:
+        middleware = build_agent_middleware()
 
-    assert len(middleware) == 1
-    assert isinstance(middleware[0], FilesystemMiddleware)
-    assert isinstance(middleware[0].backend, StateBackend)
+        assert len(middleware) == 3
+        assert isinstance(middleware[0], TodoListMiddleware)
+        assert isinstance(middleware[1], FilesystemMiddleware)
+        assert isinstance(middleware[1].backend, FilesystemBackend)
+        assert middleware[1].backend.cwd == workspace
+        assert middleware[1].backend.virtual_mode is True
+        assert isinstance(middleware[2], ShellToolMiddleware)
+        assert middleware[2]._workspace_root == workspace
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_model_agent_middleware_adds_context_and_quality_helpers(
+    monkeypatch,
+) -> None:
+    from deepagents.backends import FilesystemBackend
+    from deepagents.middleware import (
+        FilesystemMiddleware,
+        RubricMiddleware,
+        SummarizationMiddleware,
+        SummarizationToolMiddleware,
+    )
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware.shell_tool import ShellToolMiddleware
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    workspace = Path("build/test-model-agent-middleware").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    try:
+        middleware = build_agent_middleware_for_model(
+            FakeListChatModel(responses=["summary"])
+        )
+
+        assert len(middleware) == 6
+        assert isinstance(middleware[0], TodoListMiddleware)
+        assert isinstance(middleware[1], FilesystemMiddleware)
+        assert isinstance(middleware[1].backend, FilesystemBackend)
+        assert middleware[1].backend.cwd == workspace
+        assert middleware[1].backend.virtual_mode is True
+        assert isinstance(middleware[2], ShellToolMiddleware)
+        assert middleware[2]._workspace_root == workspace
+        assert isinstance(middleware[3], SummarizationMiddleware)
+        assert isinstance(middleware[4], SummarizationToolMiddleware)
+        assert isinstance(middleware[5], RubricMiddleware)
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 def test_compaction_trigger_uses_model_context_budget(monkeypatch) -> None:

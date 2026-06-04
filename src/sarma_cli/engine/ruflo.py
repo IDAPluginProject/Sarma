@@ -50,7 +50,7 @@ def build_delegate_tool(model: Any, tools: list[Any]) -> Any:
     from langchain.agents import create_agent
     from langchain_core.messages import HumanMessage
     from langchain_core.tools import tool
-    from sarma_cli.runtime.middleware import build_agent_middleware
+    from sarma_cli.runtime.middleware import build_agent_middleware_for_model
 
     @tool
     async def delegate_task(
@@ -83,7 +83,7 @@ Expected output:
             model,
             tools,
             system_prompt=prompt,
-            middleware=build_agent_middleware(),
+            middleware=build_agent_middleware_for_model(model),
         )
         result = await subagent.ainvoke(
             {"messages": [HumanMessage(content=task)]},

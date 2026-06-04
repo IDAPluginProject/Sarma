@@ -25,7 +25,7 @@ from typing_extensions import TypedDict
 
 from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS, AUDIT_SUBAGENT_ORDER
 from sarma_cli.engine.models import ResolvedSkill
-from sarma_cli.runtime.middleware import build_agent_middleware
+from sarma_cli.runtime.middleware import build_agent_middleware_for_model
 
 DEFAULT_MAX_GAPFILL = 3
 DEFAULT_MAX_FEEDBACK = 2
@@ -163,7 +163,7 @@ def _make_subagent_node(
         model,
         tools,
         system_prompt=prompt,
-        middleware=build_agent_middleware(),
+        middleware=build_agent_middleware_for_model(model),
     )
 
     async def node(state: AuditState) -> dict[str, Any]:

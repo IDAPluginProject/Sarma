@@ -9,7 +9,7 @@ from typing import Any
 from sarma_cli.engine.errors import AgentBuildError, ProviderNotConfiguredError
 from sarma_cli.engine.mcp_pool import McpClientPool
 from sarma_cli.engine.models import AgentRunConfig, ResolvedSkill
-from sarma_cli.runtime.middleware import build_agent_middleware
+from sarma_cli.runtime.middleware import build_agent_middleware_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +369,7 @@ class AgentFactory:
                 model,
                 ruflo_tools,
                 system_prompt=system_prompt,
-                middleware=build_agent_middleware(),
+                middleware=build_agent_middleware_for_model(model),
             )
 
         from langchain.agents import create_agent
@@ -379,7 +379,7 @@ class AgentFactory:
             model,
             tools,
             system_prompt=system_prompt,
-            middleware=build_agent_middleware(),
+            middleware=build_agent_middleware_for_model(model),
         )
 
     def _agent_cache_key(
