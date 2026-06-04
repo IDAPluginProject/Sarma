@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Select, Static
 
 from sarma_cli.config import (
@@ -38,8 +39,8 @@ class _Field:
     secret: bool = False
 
 
-class ConfigApp(App[ConfigEditResult | None]):
-    """Full-screen Sarma configuration app."""
+class ConfigViewMixin:
+    """Shared full-screen Sarma configuration view."""
 
     BINDINGS = [
         ("ctrl+s", "save", "Save"),
@@ -122,14 +123,17 @@ class ConfigApp(App[ConfigEditResult | None]):
     def action_save(self) -> None:
         if not self._apply_form():
             return
-        self.exit(ConfigEditResult(
+        self._finish(ConfigEditResult(
             models=deepcopy(self.models),
             active_model=self.active_model,
             agents=deepcopy(self.agents),
         ))
 
     def action_cancel(self) -> None:
-        self.exit(None)
+        self._finish(None)
+
+    def _finish(self, result: ConfigEditResult | None) -> None:
+        raise NotImplementedError
 
     async def action_new_item(self) -> None:
         self._apply_form()
@@ -431,6 +435,20 @@ def _parse_bool(value: str) -> bool:
 def _parse_list(value: str, *, default: list[str]) -> list[str]:
     parts = [part.strip() for part in value.split(",") if part.strip()]
     return parts or list(default)
+
+
+class ConfigScreen(ConfigViewMixin, Screen[ConfigEditResult | None]):
+    """Embeddable configuration screen for the full-screen MainApp."""
+
+    def _finish(self, result: ConfigEditResult | None) -> None:
+        self.dismiss(result)
+
+
+class ConfigApp(ConfigViewMixin, App[ConfigEditResult | None]):
+    """Standalone configuration app."""
+
+    def _finish(self, result: ConfigEditResult | None) -> None:
+        self.exit(result)
 
 
 async def configure_workspace_tui(config: CliConfig) -> ConfigEditResult | None:

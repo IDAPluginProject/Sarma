@@ -5,35 +5,21 @@ Ties together the workflow registry, session, and REPL loop.
 
 from __future__ import annotations
 
-import asyncio
-import os
-import time
-from contextlib import suppress
 from typing import Any
-
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.key_binding import KeyBindings
 
 from sarma_cli.engine.enums import StreamEventType
 
-from sarma_cli.commands import handle_command
 from sarma_cli.config import CliConfig
 from sarma_cli.renderer import (
     StreamPrinter,
     console,
-    print_banner,
     print_error,
-    print_info,
-    print_success,
-    print_warning,
 )
+from sarma_cli.tui.main_app import MainApp
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
 from sarma_cli.session import Session
 from sarma_cli.store import Store
-from sarma_cli.workflows import get_registry, init_workflows
-
-DOUBLE_CTRL_C_WINDOW_SECONDS = 1.0
+from sarma_cli.workflows import get_registry
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -44,173 +30,10 @@ def _truncate(text: str, max_len: int) -> str:
     return text
 
 
-def _is_quick_second_interrupt(last_interrupt_at: float, now: float) -> bool:
-    return (
-        last_interrupt_at > 0
-        and now - last_interrupt_at <= DOUBLE_CTRL_C_WINDOW_SECONDS
-    )
-
-
-def _build_prompt_key_bindings(interrupt_state: dict[str, float]) -> KeyBindings:
-    bindings = KeyBindings()
-
-    @bindings.add("escape")
-    def _cancel_input(event: Any) -> None:
-        event.app.current_buffer.reset()
-        event.app.exit(result="")
-
-    @bindings.add("c-c")
-    def _interrupt_or_exit(event: Any) -> None:
-        now = time.monotonic()
-        if _is_quick_second_interrupt(interrupt_state.get("last", 0.0), now):
-            event.app.exit(result="/exit")
-            return
-        interrupt_state["last"] = now
-        event.app.current_buffer.reset()
-        event.app.exit(result="")
-
-    return bindings
-
-
 async def run_interactive(config: CliConfig) -> None:
-    """Main interactive REPL with workflow support.
-
-    Orchestrates:
-      1. Initialize workflow registry (ruflo, audit, etc.)
-      2. Create Session
-      3. Main REPL loop:
-         - Read user input
-         - Handle /commands
-         - Run turn with agent
-         - Stream output
-         - Update graph state
-      5. Support workflow switching
-
-    Supports multiple workflows: ruflo (default), audit, etc.
-    """
-    # 1. Initialize workflow registry
-    init_workflows()
-    registry = get_registry()
-
-    # 2. Create session
-    store = Store()
-    resolver = RuntimePolicyResolver(config)
-    session = Session(config, store)
-
-    print_banner(
-        model=resolver.provider_for("ruflo").model_name,
-        mcp_count=len([s for s in config.mcp_servers if s.enabled]),
-    )
-
-    if not resolver.provider_for("ruflo").model_name:
-        print_warning("No model configured yet — run /config to set one up.")
-
-    # 4. Main REPL loop
-    interrupt_state = {"last": 0.0}
-    prompt_session: PromptSession = PromptSession(
-        history=InMemoryHistory(),
-        key_bindings=_build_prompt_key_bindings(interrupt_state),
-    )
-
-    try:
-        while True:
-            try:
-                # Show current workflow in prompt
-                workflow_name = registry.current_name()
-                user_input = await prompt_session.prompt_async(
-                    f"sarma [{workflow_name}]> "
-                )
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                now = time.monotonic()
-                if _is_quick_second_interrupt(interrupt_state.get("last", 0.0), now):
-                    break
-                interrupt_state["last"] = now
-                print_warning("Input cancelled. Press Ctrl+C again quickly to exit.")
-                continue
-
-            user_input = user_input.strip()
-            if not user_input:
-                continue
-            if user_input == "/exit":
-                break
-
-            # Handle /commands
-            if user_input.startswith("/"):
-                result = await handle_command(
-                    user_input,
-                    config=config,
-                    store=store,
-                    graph_state=session.graph_state,
-                    session=session,
-                )
-                if result == "exit":
-                    break
-                elif result == "clear":
-                    session.new_conversation()
-                    print_success("Session cleared.")
-                    continue
-                elif result == "compact":
-                    try:
-                        compacted = await session.compact_context(
-                            force=True,
-                            workflow=registry.current_name() or "ruflo",
-                        )
-                    except Exception as exc:
-                        print_error(f"Context compaction failed: {exc}")
-                    else:
-                        print_success(
-                            "Context compacted."
-                            if compacted else "Context is already within model budget."
-                        )
-                    continue
-                elif result == "restart":
-                    await session.restart_runtime()
-                    resolver = RuntimePolicyResolver(config)
-                    print_success("Workflow runtime restarted.")
-                    console.print(f"[dim]─" * 40 + "[/]")
-                    print_banner(
-                        model=resolver.provider_for("ruflo").model_name,
-                        mcp_count=len([s for s in config.mcp_servers if s.enabled]),
-                    )
-                    continue
-                elif isinstance(result, str) and result.startswith("resume:"):
-                    cid = result.split(":", 1)[1]
-                    if session.resume_conversation(cid):
-                        print_success(f"Resumed conversation [bright_blue]{cid}[/]")
-                    else:
-                        print_error(f"Conversation [bold]{cid}[/] not found.")
-                    continue
-                elif result:
-                    continue
-
-            # Run turn with agent
-            if not resolver.provider_for(registry.current_name() or "ruflo").model_name:
-                print_warning("No model configured — run /config to set one up.")
-                continue
-            try:
-                await _run_turn_interactive(session, user_input)
-            except asyncio.CancelledError:
-                console.print("\n[bold yellow]⚠ Workflow cancelled.[/] Send a new message or /exit.")
-            except KeyboardInterrupt:
-                now = time.monotonic()
-                if _is_quick_second_interrupt(interrupt_state.get("last", 0.0), now):
-                    break
-                interrupt_state["last"] = now
-                console.print(
-                    "\n[bold yellow]⚠ Workflow stopped.[/] "
-                    "Send a new message, or press Ctrl+C again quickly to exit."
-                )
-            except Exception as exc:
-                print_error(str(exc))
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await session.close()
-        store.close()
-        console.print(f"\n[bold #a371f7]Sarma[/] [dim]— Goodbye.[/]")
+    """Launch the full-screen Textual TUI."""
+    app = MainApp(config)
+    await app.run_async()
 
 
 async def run_oneshot(config: CliConfig, message: str) -> None:
@@ -243,21 +66,8 @@ async def _run_turn_interactive(session: Session, message: str) -> None:
       2. Render final graph after turn (audit mode)
     """
     printer = StreamPrinter()
-    current_task = asyncio.current_task()
-    escape_watcher = (
-        asyncio.create_task(_watch_escape_cancel(current_task))
-        if current_task is not None
-        else None
-    )
-
-    try:
-        async for event in session.run_turn(message):
-            _handle_event(event, printer)
-    finally:
-        if escape_watcher is not None:
-            escape_watcher.cancel()
-            with suppress(asyncio.CancelledError):
-                await escape_watcher
+    async for event in session.run_turn(message):
+        _handle_event(event, printer)
 
     printer.flush()
 
@@ -267,21 +77,6 @@ async def _run_turn_interactive(session: Session, message: str) -> None:
         gs = session.graph_state
         if gs.get("current_stage") or gs.get("completed"):
             console.print(current_wf.render_graph(**gs))
-
-
-async def _watch_escape_cancel(target_task: asyncio.Task[Any]) -> None:
-    if os.name != "nt":
-        return
-    import msvcrt
-
-    while not target_task.done():
-        if msvcrt.kbhit():
-            char = msvcrt.getwch()
-            if char == "\x1b":
-                target_task.cancel()
-                return
-        await asyncio.sleep(0.05)
-
 
 def _handle_event(event: Any, printer: StreamPrinter) -> None:
     """Route a StreamEvent to the appropriate renderer.

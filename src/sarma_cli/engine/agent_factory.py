@@ -9,6 +9,7 @@ from typing import Any
 from sarma_cli.engine.errors import AgentBuildError, ProviderNotConfiguredError
 from sarma_cli.engine.mcp_pool import McpClientPool
 from sarma_cli.engine.models import AgentRunConfig, ResolvedSkill
+from sarma_cli.runtime.middleware import build_agent_middleware
 
 logger = logging.getLogger(__name__)
 
@@ -359,20 +360,26 @@ class AgentFactory:
             )
 
         if config.mode == "ruflo":
-            from langgraph.prebuilt import create_react_agent
+            from langchain.agents import create_agent
             from sarma_cli.engine.ruflo import build_delegate_tool, build_ruflo_prompt
 
             system_prompt = build_ruflo_prompt(config.system_prompt or "")
             ruflo_tools = [*tools, build_delegate_tool(model, tools)]
-            return create_react_agent(
-                model, ruflo_tools, prompt=system_prompt
+            return create_agent(
+                model,
+                ruflo_tools,
+                system_prompt=system_prompt,
+                middleware=build_agent_middleware(),
             )
 
-        from langgraph.prebuilt import create_react_agent
+        from langchain.agents import create_agent
 
         system_prompt = config.system_prompt or ""
-        return create_react_agent(
-            model, tools, prompt=system_prompt
+        return create_agent(
+            model,
+            tools,
+            system_prompt=system_prompt,
+            middleware=build_agent_middleware(),
         )
 
     def _agent_cache_key(

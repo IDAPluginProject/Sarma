@@ -75,8 +75,11 @@ AUDIT_SUBAGENTS: list[dict[str, Any]] = [
             "You are the Validate agent.  For each candidate from Hunt, "
             "verify reachability from an external entry point, confirm the "
             "dangerous sink is not guarded by sanitization, and check that "
-            "the code path is not dead.  Mark each candidate as confirmed, "
-            "rejected, or needs-more-analysis."
+            "the code path is not dead.  Do a full end-to-end check so every "
+            "accepted vulnerability is real, reliable, and practically valid.  "
+            "If at least one vulnerability is real and reliable, the stage can "
+            "pass with that confirmed finding.  Mark each candidate as "
+            "confirmed, rejected, or needs-more-analysis."
         ),
         "_tool_prefixes": [
             "decompile", "disasm", "get_basic_blocks",

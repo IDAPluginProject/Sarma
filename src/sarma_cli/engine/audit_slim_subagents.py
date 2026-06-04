@@ -1,16 +1,15 @@
-"""Audit-Slim Harness — minimal 3-stage subagent pipeline.
+"""Audit-Slim Harness — compact 4-stage subagent pipeline.
 
 A lightweight alternative to the full 8-stage audit, for quick passes:
 
-1. Recon  — Does the audit: survey the binary AND hunt for vulnerabilities,
-            producing a candidate findings list in one pass.
-2. Verify — Ensures the findings are real and reliable: confirm reachability,
-            rule out dead/sanitized paths, discard false positives.
-3. Report — Validates the verified results once more and produces clear,
-            actionable user-facing feedback.
+1. Recon   — Survey project/binary architecture and identify weak areas.
+2. Hunter  — Audit vulnerabilities in the weak areas.
+3. Verify  — Confirm findings are real and reliable; send weak findings back
+             to Hunter for another pass.
+4. Report  — Produce clear, actionable user-facing feedback.
 
-Linear flow: recon -> verify -> report (no loops). All agents share the
-IDA MCP tool set.
+Flow: recon -> hunter <-> verify -> report. All agents share the IDA MCP tool
+set, with tool filters tuned per stage.
 """
 
 from __future__ import annotations
@@ -22,43 +21,69 @@ AUDIT_SLIM_SUBAGENTS: list[dict[str, Any]] = [
     {
         "name": "recon",
         "description": (
-            "Audit the binary in one pass: survey its structure and hunt for "
-            "vulnerabilities, producing a candidate findings list."
+            "Probe the target's overall architecture, framework, entry points, "
+            "trust boundaries, and likely weak areas for Hunter to audit."
         ),
         "system_prompt": (
-            "You are the Recon agent of a lightweight audit.  You perform the "
-            "whole discovery pass yourself: first survey the binary "
-            "(metadata, segments, imports/exports, functions, strings, entry "
-            "points), then hunt for vulnerabilities — command injection, "
-            "memory unsafety, auth bypass, path traversal, and similar "
-            "classes.  Use IDA MCP tools (decompile, disasm, xrefs, byte "
-            "search) as needed.  Output a structured candidate findings list: "
-            "for each, record address, function, vulnerability class, and a "
-            "brief rationale with supporting evidence."
+            "You are the Recon agent of a lightweight audit.  Your job is not "
+            "to prove individual vulnerabilities.  Survey the target's overall "
+            "architecture and framework: metadata, segments, imports/exports, "
+            "entry points, important modules, request/input handling, IPC/file/"
+            "network boundaries, privilege boundaries, and security-sensitive "
+            "subsystems.  Identify weak areas Hunter should audit next.  "
+            "Output a structured architecture and weak-point map with concrete "
+            "addresses, functions, strings, and rationale."
         ),
         "_tool_prefixes": [
             "get_metadata", "list_segments", "list_functions",
             "list_imports", "list_exports", "list_strings",
             "get_entry_points", "get_bytes", "decompile", "disasm",
-            "find_bytes", "get_callees", "get_callers",
+            "get_callees", "get_callers", "xrefs_to", "xrefs_from",
+        ],
+    },
+    {
+        "name": "hunter",
+        "description": (
+            "Audit vulnerabilities in the weak areas identified by Recon, "
+            "producing concrete candidate findings for Verify."
+        ),
+        "system_prompt": (
+            "You are the Hunter agent.  Use Recon's architecture and weak-point "
+            "map to audit for real vulnerability candidates.  Focus on command "
+            "injection, memory corruption, auth bypass, path traversal, unsafe "
+            "deserialization/parsing, race conditions, and dangerous trust "
+            "boundary crossings.  For each candidate, record address, function, "
+            "vulnerability class, data/control-flow evidence, and what Verify "
+            "must confirm.  If Verify returned feedback, address that feedback "
+            "directly before adding new candidates."
+        ),
+        "_tool_prefixes": [
+            "decompile", "disasm", "find_bytes", "list_strings",
+            "get_basic_blocks", "get_callees", "get_callers",
             "xrefs_to", "xrefs_from", "linear_disasm",
         ],
     },
     {
         "name": "verify",
         "description": (
-            "Ensure the audit results are real and reliable: confirm each "
-            "candidate is reachable and exploitable, discard false positives."
+            "Confirm Hunter findings are real and reliable; return weak or "
+            "unsupported findings to Hunter with concrete feedback."
         ),
         "system_prompt": (
-            "You are the Verify agent.  For each candidate the Recon agent "
-            "reported, establish whether it is a genuine, reliable finding. "
-            "Confirm reachability from an external entry point, rule out dead "
-            "or unreachable code, and check the dangerous sink is not already "
-            "sanitized or guarded.  Re-examine the evidence with IDA MCP "
-            "tools rather than trusting Recon's claims.  Output the findings "
-            "marked confirmed or rejected, each with the concrete evidence "
-            "that supports the verdict."
+            "You are the Verify agent.  For each candidate Hunter reported, "
+            "establish whether it is a genuine, reliable finding.  Confirm "
+            "reachability from an external entry point, rule out dead or "
+            "unreachable code, and check the dangerous sink is not already "
+            "sanitized or guarded.  Re-examine evidence with IDA MCP tools "
+            "rather than trusting Hunter's claims.  Do a full end-to-end check "
+            "so every accepted vulnerability is real, reliable, and practically "
+            "valid.  If at least one vulnerability is real and reliable, the "
+            "stage can pass with that confirmed finding.\n\n"
+            "Routing contract: if the findings are not yet real/reliable, "
+            "start your answer with `needs-hunter` and give concrete feedback "
+            "Hunter must act on.  If at least one finding is confirmed and "
+            "ready for reporting, start your answer with `verified` and list "
+            "only the confirmed findings with evidence."
         ),
         "_tool_prefixes": [
             "decompile", "disasm", "get_basic_blocks",
@@ -74,9 +99,9 @@ AUDIT_SLIM_SUBAGENTS: list[dict[str, Any]] = [
         ),
         "system_prompt": (
             "You are the Report agent.  Take the confirmed findings from "
-            "Verify and do a final validation pass: sanity-check each verdict "
-            "and drop anything unsupported.  Then synthesize clear, "
-            "actionable feedback for the user.  For each finding include: "
+            "Verify and synthesize clear, actionable feedback for the user.  "
+            "Do not revive rejected or unverified candidates.  For each "
+            "finding include: "
             "title, severity, affected function/address, a concise "
             "explanation of the issue and its impact, and a remediation "
             "recommendation.  If no findings survived, say so plainly and "
@@ -91,4 +116,3 @@ AUDIT_SLIM_SUBAGENTS: list[dict[str, Any]] = [
 AUDIT_SLIM_SUBAGENT_ORDER: tuple[str, ...] = tuple(
     s["name"] for s in AUDIT_SLIM_SUBAGENTS
 )
-

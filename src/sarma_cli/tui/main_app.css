@@ -1,0 +1,160 @@
+/* MainApp full-screen layout */
+
+Screen {
+    align: center middle;
+}
+
+#main-content {
+    width: 3fr;
+    height: 100%;
+    layout: vertical;
+}
+
+#chat-area {
+    height: 1fr;
+    border-right: solid #30363d;
+    background: #0d1117;
+}
+
+#input-bar {
+    height: auto;
+    max-height: 6;
+    border-top: solid #30363d;
+    border-right: solid #30363d;
+    background: #161b22;
+}
+
+#sidebar {
+    width: 1fr;
+    height: 100%;
+    background: #161b22;
+    border-left: solid #30363d;
+}
+
+/* Chat area */
+
+.user-message {
+    width: 100%;
+    height: auto;
+    padding: 0 2 0 4;
+    margin-bottom: 1;
+}
+
+.message-speaker {
+    width: 100%;
+    height: auto;
+    padding: 0 2;
+    margin-top: 1;
+    color: #7d8590;
+    text-style: bold;
+}
+
+.assistant-message {
+    width: 100%;
+    height: auto;
+    padding: 0 2 0 4;
+    margin-bottom: 1;
+}
+
+.tool-line {
+    width: 100%;
+    height: auto;
+    padding: 0 4;
+    margin-bottom: 1;
+    color: #7d8590;
+}
+
+.tool-call {
+    width: 100%;
+    height: auto;
+    margin: 0 2 1 4;
+    border: solid #30363d;
+    background: #0d1117;
+}
+
+.tool-call-body {
+    width: 100%;
+    height: auto;
+    padding: 0 1 1 1;
+    color: #c9d1d9;
+}
+
+.subagent-divider {
+    width: 100%;
+    height: auto;
+    padding: 0 2;
+    margin: 1 0;
+    color: #58a6ff;
+    text-style: bold;
+}
+
+/* Input bar */
+
+#user-input {
+    width: 1fr;
+    margin: 1 2;
+    background: #0d1117;
+    color: #e6edf3;
+    border: tall #30363d;
+}
+
+#user-input:focus {
+    border: tall #58a6ff;
+}
+
+#send-button {
+    margin: 1 2 1 0;
+    min-width: 10;
+    background: #1f6feb;
+    color: #ffffff;
+    border: tall #58a6ff;
+}
+
+#send-button:hover {
+    background: #388bfd;
+    border: tall #79c0ff;
+}
+
+/* Sidebar */
+
+.sidebar-section {
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+    border-bottom: solid #30363d;
+}
+
+.sidebar-title {
+    color: #7d8590;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.sidebar-value {
+    color: #e6edf3;
+}
+
+.sidebar-active {
+    color: #3fb950;
+    text-style: bold;
+}
+
+.sidebar-inactive {
+    color: #7d8590;
+}
+
+.sidebar-mcp-list {
+    margin-top: 1;
+    height: auto;
+}
+
+.sidebar-graph-section {
+    height: 1fr;
+    min-height: 10;
+}
+
+.sidebar-graph {
+    width: 100%;
+    height: auto;
+    min-height: 6;
+}

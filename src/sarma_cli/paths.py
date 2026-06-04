@@ -19,6 +19,7 @@ _DIR_NAME = ".sarma"
 MODELS_NAME = "models.toml"
 AGENTS_NAME = "agents.toml"
 MCP_NAME = "mcp.toml"
+INPUT_HISTORY_NAME = ".history"
 
 
 def global_dir() -> Path:
@@ -69,6 +70,11 @@ def local_mcp_file() -> Path:
 def db_path() -> Path:
     """Session database lives per-workspace."""
     return local_dir() / "db.sqlite"
+
+
+def input_history_file() -> Path:
+    """Line-based user input history for the full-screen TUI."""
+    return local_dir() / INPUT_HISTORY_NAME
 
 
 def global_skills_dir() -> Path:

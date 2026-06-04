@@ -85,12 +85,13 @@ class AgentRunner:
 
         agent, _tools = await self._factory.build(self.run_config)
         input_messages = self._build_input_messages(self._history, message)
+        graph_input = self._build_graph_input(input_messages, message, self._mode)
 
         translator = EventTranslator(self._conversation_id, self._turn_id)
 
         try:
             async for chunk in agent.astream(
-                {"messages": input_messages},
+                graph_input,
                 stream_mode=["messages", "updates", "custom"],
                 subgraphs=True,
                 version="v2",
@@ -156,3 +157,18 @@ class AgentRunner:
         messages: list[Any] = [msg.to_langchain_message() for msg in history]
         messages.append(HumanMessage(content=user_message))
         return messages
+
+    @staticmethod
+    def _build_graph_input(
+        messages: list[Any],
+        user_message: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        graph_input: dict[str, Any] = {"messages": messages}
+        if mode in ("audit", "audit-slim"):
+            graph_input["audit_task"] = user_message
+            graph_input["stage_outputs"] = {}
+            graph_input["gapfill_count"] = 0
+            graph_input["feedback_count"] = 0
+            graph_input["current_stage"] = ""
+        return graph_input

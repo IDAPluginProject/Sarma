@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from rich.console import Console
-from textual.widgets import Button, Input, ListView, Select
+from textual.app import App, ComposeResult
+from textual.widgets import Button, Input, ListView, Select, Static
 
 from sarma_cli.config import (
     AgentConfig,
@@ -22,9 +23,12 @@ from sarma_cli.config import (
 )
 from sarma_cli.engine.audit_graph import _filter_tools_by_mcp, _filter_tools_by_prefix
 from sarma_cli.engine.agent_factory import AgentFactory
+from sarma_cli.engine.agent_runner import AgentRunner
 from sarma_cli.engine.dto import McpServerDTO, ModelProviderDTO
-from sarma_cli.engine.models import AgentRunConfig, ConversationMessage
+from sarma_cli.engine.enums import StreamEventType
+from sarma_cli.engine.models import AgentRunConfig, ConversationMessage, StreamEvent
 from sarma_cli.engine.mcp_pool import _connect_timeout
+from sarma_cli.engine.streaming import EventTranslator
 from sarma_cli.resources.plugins import (
     create_mcp_server,
     install_skill_from_zip,
@@ -32,16 +36,21 @@ from sarma_cli.resources.plugins import (
     validate_mcp_server,
 )
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
+from sarma_cli.runtime.middleware import build_agent_middleware
 from sarma_cli.store import Store
 from sarma_cli.workflows import get_registry, init_workflows
-from sarma_cli.app import _is_quick_second_interrupt
 from sarma_cli.engine.ruflo import SUBAGENT_RESULT_TEMPLATE, build_ruflo_prompt
 from sarma_cli.session import Session
 from sarma_cli.status import render_status_panel
 from sarma_cli.context.compaction import ContextCompactor, ContextWindowPolicy
 import sarma_cli.tui.plugin_app as plugin_app_module
+from sarma_cli.tui.chat_area import AssistantMessage, ChatArea, ToolCallWidget
 from sarma_cli.tui.config_app import ConfigApp
+from sarma_cli.tui.input_bar import HistoryInput, InputBar
+from sarma_cli.tui.input_history import append_input_history, load_input_history
+from sarma_cli.tui.main_app import MainApp, StreamEventMessage
 from sarma_cli.tui.plugin_app import PluginApp
+from sarma_cli.tui.sidebar import Sidebar
 
 
 @dataclass
@@ -78,6 +87,14 @@ class StatusPool:
     @property
     def tools(self) -> list[Tool]:
         return [Tool("ida-mcp_decompile"), Tool("ida-mcp_disasm")]
+
+    @property
+    def server_statuses(self) -> list[dict[str, object]]:
+        return [{
+            "name": "ida-mcp",
+            "connected": True,
+            "tool_count": 2,
+        }]
 
 
 class CountingAgentFactory(AgentFactory):
@@ -152,10 +169,132 @@ def test_subagent_tool_prefix_filter_fails_closed() -> None:
     assert _filter_tools_by_prefix(tools, ["missing_tool"]) == []
 
 
-def test_quick_second_interrupt_detection() -> None:
-    assert not _is_quick_second_interrupt(0.0, 10.0)
-    assert _is_quick_second_interrupt(10.0, 10.5)
-    assert not _is_quick_second_interrupt(10.0, 11.5)
+def test_event_translator_resolves_langgraph_v2_subagent_namespace() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    events = EventTranslator("c1", "t1").translate({
+        "type": "messages",
+        "ns": ("recon:9302c9ff-eb94",),
+        "data": (AIMessageChunk(content="x"), {}),
+    })
+
+    tokens = [event for event in events if event.type == StreamEventType.TOKEN]
+    assert len(tokens) == 1
+    assert tokens[0].payload["subagent"] == "recon"
+
+
+def test_audit_graph_input_carries_user_task_separately() -> None:
+    graph_input = AgentRunner._build_graph_input(
+        messages=[],
+        user_message="audit FortiOS init binary",
+        mode="audit",
+    )
+
+    assert graph_input["audit_task"] == "audit FortiOS init binary"
+    assert graph_input["stage_outputs"] == {}
+    assert graph_input["gapfill_count"] == 0
+    assert graph_input["feedback_count"] == 0
+
+
+def test_audit_slim_uses_four_stage_feedback_harness() -> None:
+    from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENT_ORDER
+
+    assert AUDIT_SLIM_SUBAGENT_ORDER == ("recon", "hunter", "verify", "report")
+
+
+def test_audit_stage_context_uses_task_and_prior_outputs_only() -> None:
+    from sarma_cli.engine.audit_graph import _build_context
+
+    context = _build_context(
+        "validate",
+        "audit FortiOS init binary",
+        {
+            "recon": "binary metadata",
+            "hunt": "candidate at 0x401000",
+        },
+    )
+
+    assert "audit FortiOS init binary" in context
+    assert "### recon" in context
+    assert "binary metadata" in context
+    assert "### hunt" in context
+    assert "candidate at 0x401000" in context
+    assert "hidden tool traces" in context
+
+
+def test_audit_route_events_update_graph_loop_counts(monkeypatch) -> None:
+    workspace = Path("build/test-audit-route-state").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+
+    config = CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")])
+    store = Store()
+    session = Session(config, store)
+
+    event = StreamEvent(
+        type=StreamEventType.CUSTOM_PROGRESS,
+        payload={
+            "data": {
+                "type": "audit_route",
+                "from": "validate",
+                "to": "gapfill",
+                "loop": "gapfill",
+                "count": 2,
+            }
+        },
+    )
+
+    session._track_graph_progress(event)
+
+    assert session.graph_state["gapfill_loops"] == 2
+    store.close()
+    shutil.rmtree(workspace, ignore_errors=True)
+
+
+@pytest.mark.anyio
+async def test_audit_graph_streams_subagent_tokens_once() -> None:
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from sarma_cli.engine.audit_slim_graph import build_audit_slim_graph
+
+    class ToolBindingFakeModel(FakeListChatModel):
+        def bind_tools(self, *args: object, **kwargs: object) -> object:
+            return self
+
+    graph = build_audit_slim_graph(
+        ToolBindingFakeModel(responses=[
+            "hello from recon",
+            "hello from hunter",
+            "verified\nhello from verify",
+            "hello from report",
+        ]),
+        [],
+    )
+    translator = EventTranslator("c1", "t1")
+    tokens_by_subagent: dict[str, list[str]] = {}
+
+    async for chunk in graph.astream(
+        {"messages": []},
+        stream_mode=["messages", "updates", "custom"],
+        subgraphs=True,
+        version="v2",
+    ):
+        for event in translator.translate(chunk):
+            if event.type == StreamEventType.TOKEN:
+                subagent = str(event.payload.get("subagent") or "")
+                tokens_by_subagent.setdefault(subagent, []).append(
+                    str(event.payload.get("content") or "")
+                )
+
+    rendered = {
+        subagent: "".join(tokens)
+        for subagent, tokens in tokens_by_subagent.items()
+    }
+    assert rendered["recon"] == "hello from recon"
+    assert rendered["hunter"] == "hello from hunter"
+    assert rendered["verify"] == "verified\nhello from verify"
+    assert rendered["report"] == "hello from report"
+    assert "orchestrator" not in rendered
 
 
 def test_mcp_connect_timeout_is_capped_for_responsiveness() -> None:
@@ -164,7 +303,7 @@ def test_mcp_connect_timeout_is_capped_for_responsiveness() -> None:
     assert _connect_timeout({"local": {"transport": "http", "timeout": 5}}) == 5.0
 
 
-def test_status_panel_shows_mcp_runtime_and_tools() -> None:
+def test_status_panel_summarizes_mcp_runtime() -> None:
     config = CliConfig(
         models=[ProviderConfig(name="default", model_name="gpt-4o")],
         mcp_servers=[McpServerConfig(name="ida-mcp", transport="http", enabled=True)],
@@ -174,10 +313,118 @@ def test_status_panel_shows_mcp_runtime_and_tools() -> None:
     console.print(render_status_panel(config, pool=StatusPool()))
     text = console.export_text()
 
-    assert "ida-mcp (http)" in text
     assert "connected" in text
-    assert "ida-mcp_decompile" in text
-    assert "ida-mcp_disasm" in text
+    assert "1 enabled" in text
+    assert "2 tools" in text
+    assert "ida-mcp" in text
+    assert "ida-mcp_decompile" not in text
+    assert "ida-mcp_disasm" not in text
+
+
+@pytest.mark.anyio
+async def test_sidebar_mcp_lists_server_names_without_tool_details() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        sidebar = app.query_one(Sidebar)
+        sidebar.update_mcp(True, servers=[
+            {"name": "ida-mcp", "connected": True, "tool_count": 64},
+            {"name": "other-mcp", "connected": False, "tool_count": 0},
+        ])
+
+        text = sidebar._render_mcp_servers().plain
+
+        assert "ida-mcp" in text
+        assert "connected" in text
+        assert "other-mcp" in text
+        assert "IDA-MCP_decompile" not in text
+
+
+@pytest.mark.anyio
+async def test_sidebar_renders_ruflo_runtime_graph() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        sidebar = app.query_one(Sidebar)
+        sidebar.update_workflow("ruflo")
+        sidebar.update_run_state(
+            active=["recon", "verifier"],
+            seen=["recon", "verifier"],
+            completed={"recon"},
+        )
+
+        text = sidebar.query_one("#workflow-graph", Static).content.plain
+
+        assert "agents run  2" in text
+        assert "parallel" in text
+        assert "▶ verifier" in text
+        assert "✓ recon" in text
+
+
+@pytest.mark.anyio
+async def test_sidebar_renders_per_agent_models() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        sidebar = app.query_one(Sidebar)
+        sidebar.update_models([
+            ("recon", "gpt-4o"),
+            ("hunter", "claude-sonnet"),
+            ("verify", "gpt-4o"),
+        ])
+
+        text = sidebar.query_one("#model-name", Static).content.plain
+
+        assert "recon  gpt-4o" in text
+        assert "hunter  claude-sonnet" in text
+        assert "verify  gpt-4o" in text
+
+
+@pytest.mark.anyio
+async def test_sidebar_renders_audit_harness_side_branch() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        sidebar = app.query_one(Sidebar)
+        sidebar.update_workflow("audit")
+        sidebar.update_run_state(
+            active=["gapfill"],
+            seen=["recon", "hunt", "validate", "gapfill"],
+            completed={"recon", "hunt", "validate"},
+            gapfill_loops=1,
+            feedback_loops=0,
+        )
+
+        text = sidebar.query_one("#workflow-graph", Static).content.plain
+
+        assert "recon" in text
+        assert "hunt" in text
+        assert "validate" in text
+        assert "└ ▶ gapfill ⇢ hunt/validate ×1" in text
+        assert "feedback" in text
+        assert "report" in text
+
+
+@pytest.mark.anyio
+async def test_sidebar_renders_audit_slim_feedback_loop() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        sidebar = app.query_one(Sidebar)
+        sidebar.update_workflow("audit-slim")
+        sidebar.update_run_state(
+            active=["verify"],
+            seen=["recon", "hunter", "verify"],
+            completed={"recon", "hunter"},
+            feedback_loops=1,
+        )
+
+        text = sidebar.query_one("#workflow-graph", Static).content.plain
+
+        assert "recon" in text
+        assert "hunter ↔ ▶ verify" in text
+        assert "feedback  verify → hunter ×1" in text
+        assert "report" in text
 
 
 def test_mcp_filter_allows_only_named_server_tools() -> None:
@@ -212,6 +459,29 @@ def test_runtime_resolver_expands_workflow_mcp_without_config_runtime_imports() 
     assert {server.name for server in plan.enabled_servers} == {"ida-mcp", "other-mcp"}
     assert plan.subagent_mcp_allow["recon"] == ["ida-mcp"]
     assert plan.subagent_mcp_allow["hunt"] == ["other-mcp"]
+
+
+def test_runtime_resolver_reports_per_agent_model_assignments() -> None:
+    config = CliConfig(
+        active_model="default",
+        models=[
+            ProviderConfig(name="default", model_name="gpt-4o"),
+            ProviderConfig(name="backup", model_name="claude-sonnet"),
+        ],
+        agents=[
+            AgentConfig(name="audit-slim", model="default"),
+            AgentConfig(name="audit-slim.hunter", model="backup"),
+        ],
+    )
+
+    assignments = dict(RuntimePolicyResolver(config).model_assignments_for("audit-slim"))
+
+    assert assignments == {
+        "recon": "gpt-4o",
+        "hunter": "claude-sonnet",
+        "verify": "gpt-4o",
+        "report": "gpt-4o",
+    }
 
 
 def test_store_rejects_unknown_conversation_update_field(monkeypatch) -> None:
@@ -348,6 +618,17 @@ def test_ruflo_prompt_requires_compact_subagent_results() -> None:
     assert "hidden chain-of-thought" in SUBAGENT_RESULT_TEMPLATE
 
 
+def test_default_agent_middleware_uses_virtual_filesystem_state() -> None:
+    from deepagents.backends import StateBackend
+    from deepagents.middleware import FilesystemMiddleware
+
+    middleware = build_agent_middleware()
+
+    assert len(middleware) == 1
+    assert isinstance(middleware[0], FilesystemMiddleware)
+    assert isinstance(middleware[0].backend, StateBackend)
+
+
 def test_compaction_trigger_uses_model_context_budget(monkeypatch) -> None:
     config = CliConfig(
         active_model="default",
@@ -427,6 +708,63 @@ def test_store_replace_messages_after_compaction(monkeypatch) -> None:
     assert artifacts[0]["source_count"] == 1
 
     store.close()
+    shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_input_history_file_keeps_recent_unique_entries() -> None:
+    workspace = Path("build/test-input-history").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    history_file = workspace / ".history"
+
+    append_input_history("first", history_file)
+    append_input_history("second", history_file)
+    append_input_history("first", history_file)
+
+    assert load_input_history(history_file) == ["second", "first"]
+
+    shutil.rmtree(workspace, ignore_errors=True)
+
+
+@pytest.mark.anyio
+async def test_history_input_navigation_and_completion() -> None:
+    workspace = Path("build/test-history-input-widget").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    history_file = workspace / ".history"
+    append_input_history("audit fortios init", history_file)
+    append_input_history("list functions", history_file)
+
+    class HistoryInputApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield HistoryInput(history_path=history_file)
+
+    app = HistoryInputApp()
+
+    async with app.run_test():
+        input_widget = app.query_one(HistoryInput)
+
+        input_widget._previous_history()
+        assert input_widget.value == "list functions"
+
+        input_widget._previous_history()
+        assert input_widget.value == "audit fortios init"
+
+        input_widget._next_history()
+        assert input_widget.value == "list functions"
+
+        input_widget.value = "/wor"
+        input_widget._complete()
+        assert input_widget.value == "/workflow "
+
+        input_widget.value = "/workflow au"
+        input_widget._complete()
+        assert input_widget.value == "/workflow audit"
+
+        input_widget.value = "audit"
+        input_widget._complete()
+        assert input_widget.value == "audit fortios init"
+
     shutil.rmtree(workspace, ignore_errors=True)
 
 
@@ -589,6 +927,253 @@ async def test_plugin_app_skillhub_results_install_from_right_pane(monkeypatch) 
 
         assert installed == [("https://example.test/demo-skill.zip", "workspace")]
         assert "Skill installed and validated" in app.status
+
+
+@pytest.mark.anyio
+async def test_main_app_handles_core_commands_inside_textual() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        input_widget = bar.query_one("#user-input", Input)
+
+        input_widget.value = "/workflow"
+        bar._submit_input()
+        await pilot.pause()
+
+        input_widget.value = "/status"
+        bar._submit_input()
+        await pilot.pause()
+
+        input_widget.value = "/models"
+        bar._submit_input()
+        await pilot.pause()
+
+        input_widget.value = "/history"
+        bar._submit_input()
+        await pilot.pause()
+
+        input_widget.value = "/graph"
+        bar._submit_input()
+        await pilot.pause()
+
+        await app._handle_config_command()
+        await pilot.pause()
+        assert type(app.screen).__name__ == "ConfigScreen"
+
+        app.screen.dismiss(None)
+        await pilot.pause()
+
+        input_widget.value = "/plugin"
+        bar._submit_input()
+        await pilot.pause()
+        assert type(app.screen).__name__ == "PluginScreen"
+
+        app.screen.dismiss(None)
+        await pilot.pause()
+
+
+@pytest.mark.anyio
+async def test_main_app_suppresses_parallel_subagent_detail() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.SUBAGENT_START,
+            payload={"subagent": "recon"},
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.SUBAGENT_START,
+            payload={"subagent": "hunt"},
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOKEN,
+            payload={"subagent": "recon", "content": "hidden detail"},
+        )))
+
+        assert app._active_agents == ["recon", "hunt"]
+        assert app.query_one(Sidebar)._current_agents == ["recon", "hunt"]
+        assert app.query_one(ChatArea).get_current_assistant() is None
+
+
+@pytest.mark.anyio
+async def test_main_app_ignores_orphan_whitespace_tokens() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOKEN,
+            payload={"subagent": "orchestrator", "content": "\n"},
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOKEN,
+            payload={"subagent": "recon", "content": "I'll start"},
+        )))
+
+        assistants = [
+            child
+            for child in app.query_one(ChatArea).children
+            if isinstance(child, AssistantMessage)
+        ]
+
+        assert len(assistants) == 1
+        assert assistants[0].speaker == "recon"
+
+
+@pytest.mark.anyio
+async def test_main_app_interleaves_markdown_and_collapsed_tool_events() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOKEN,
+            payload={"subagent": "orchestrator", "content": "Before tool.\n"},
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOOL_START,
+            payload={
+                "subagent": "orchestrator",
+                "tool_name": "IDA-MCP_decompile",
+                "tool_call_id": "call-1",
+                "args": {"address": "0x401000"},
+            },
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOOL_RESULT,
+            payload={
+                "subagent": "orchestrator",
+                "tool_name": "IDA-MCP_decompile",
+                "tool_call_id": "call-1",
+                "result": "decompiled main",
+            },
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.SKILL_TRIGGERED,
+            payload={
+                "subagent": "orchestrator",
+                "skill_name": "idapython",
+                "event": "skill_loaded",
+                "detail": "loaded SKILL.md",
+            },
+        )))
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOKEN,
+            payload={"subagent": "orchestrator", "content": "After tool."},
+        )))
+
+        chat = app.query_one(ChatArea)
+        flow = [
+            child
+            for child in chat.children
+            if isinstance(child, (AssistantMessage, ToolCallWidget))
+            or (isinstance(child, Static) and "tool-line" in child.classes)
+        ]
+
+        assert [type(child) for child in flow] == [
+            AssistantMessage,
+            ToolCallWidget,
+            Static,
+            AssistantMessage,
+        ]
+        tool_blocks = [child for child in flow if isinstance(child, ToolCallWidget)]
+        assert len(tool_blocks) == 1
+        assert tool_blocks[0].tool_name == "IDA-MCP_decompile"
+        assert tool_blocks[0].status == "done"
+        assert tool_blocks[0].collapsed is True
+        skill_lines = [
+            child for child in flow
+            if isinstance(child, Static) and "tool-line" in child.classes
+        ]
+        assert len(skill_lines) == 1
+        assert "idapython" in skill_lines[0].content.plain
+
+
+@pytest.mark.anyio
+async def test_chat_area_follow_stays_sticky_until_user_scrolls(monkeypatch) -> None:
+    class ChatScrollApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield ChatArea()
+
+    app = ChatScrollApp()
+
+    async with app.run_test():
+        chat = app.query_one(ChatArea)
+
+        monkeypatch.setattr(ChatArea, "_is_near_vertical_end", lambda self: False)
+        assert chat.should_follow() is True
+
+        chat.watch_scroll_y(10, 5)
+        assert chat.should_follow() is False
+
+        monkeypatch.setattr(ChatArea, "_is_near_vertical_end", lambda self: True)
+        assert chat.should_follow() is True
+
+
+def test_chat_area_follow_scrolls_after_layout_refresh(monkeypatch) -> None:
+    chat = ChatArea()
+    scroll_calls = 0
+    scheduled: list[object] = []
+
+    def fake_scroll_end(self, **kwargs) -> None:
+        nonlocal scroll_calls
+        assert kwargs["animate"] is False
+        assert kwargs["immediate"] is True
+        scroll_calls += 1
+
+    def fake_schedule(self, callback) -> None:
+        scheduled.append(callback)
+
+    monkeypatch.setattr(ChatArea, "scroll_end", fake_scroll_end)
+    monkeypatch.setattr(ChatArea, "call_after_refresh", fake_schedule)
+    monkeypatch.setattr(ChatArea, "call_later", fake_schedule)
+
+    chat.follow_if(True)
+
+    assert scroll_calls == 1
+    assert len(scheduled) == 2
+
+    for callback in scheduled:
+        callback()
+
+    assert scroll_calls == 3
+
+
+@pytest.mark.anyio
+async def test_main_app_updates_ruflo_graph_for_delegate_task() -> None:
+    app = MainApp(CliConfig(models=[ProviderConfig(name="default", model_name="gpt-4o")]))
+
+    async with app.run_test():
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOOL_START,
+            payload={
+                "subagent": "orchestrator",
+                "tool_name": "delegate_task",
+                "tool_call_id": "call-1",
+                "args": {
+                    "subagent_name": "recon",
+                    "task": "collect context",
+                },
+            },
+        )))
+
+        sidebar = app.query_one(Sidebar)
+        active_text = sidebar.query_one("#workflow-graph", Static).content.plain
+        assert "agents run  1" in active_text
+        assert "▶ recon" in active_text
+
+        await app.on_stream_event_message(StreamEventMessage(StreamEvent(
+            type=StreamEventType.TOOL_RESULT,
+            payload={
+                "subagent": "orchestrator",
+                "tool_name": "delegate_task",
+                "tool_call_id": "call-1",
+                "result": "done",
+            },
+        )))
+
+        done_text = sidebar.query_one("#workflow-graph", Static).content.plain
+        assert "active  idle" in done_text
+        assert "✓ recon" in done_text
 
 
 @pytest.mark.anyio

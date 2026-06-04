@@ -126,6 +126,12 @@ mcp = ["*"]
 skills = []
 
 [[agents]]
+name = "audit-slim.hunter"
+model = "default"
+mcp = ["*"]
+skills = []
+
+[[agents]]
 name = "audit-slim.verify"
 model = "default"
 mcp = ["*"]

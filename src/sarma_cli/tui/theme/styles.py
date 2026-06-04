@@ -30,20 +30,12 @@ Footer {
     padding: 1 2;
 }
 
-#items:focus {
-    border: tall #58a6ff;
-}
-
 ListView {
     background: #161b22;
     color: #e6edf3;
     scrollbar-background: #0d1117;
     scrollbar-color: #30363d;
     scrollbar-color-hover: #58a6ff;
-}
-
-ListView:focus {
-    border: tall #58a6ff;
 }
 
 ListItem {
@@ -187,10 +179,6 @@ def _pane_css(*, sections_width: int, detail_selector: str) -> str:
     padding: 1 2;
 }}
 
-#sections:focus {{
-    border: tall #58a6ff;
-}}
-
 {detail_selector} {{
     width: 1fr;
     border: solid #30363d;
@@ -198,9 +186,6 @@ def _pane_css(*, sections_width: int, detail_selector: str) -> str:
     padding: 1 2;
 }}
 
-{detail_selector}:focus-within {{
-    border: tall #58a6ff;
-}}
 """
 
 

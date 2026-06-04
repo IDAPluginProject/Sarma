@@ -47,9 +47,10 @@ def build_ruflo_prompt(base_prompt: str) -> str:
 
 def build_delegate_tool(model: Any, tools: list[Any]) -> Any:
     """Create the Ruflo delegation tool."""
+    from langchain.agents import create_agent
     from langchain_core.messages import HumanMessage
     from langchain_core.tools import tool
-    from langgraph.prebuilt import create_react_agent
+    from sarma_cli.runtime.middleware import build_agent_middleware
 
     @tool
     async def delegate_task(
@@ -78,7 +79,12 @@ Expected output:
 
 {SUBAGENT_RESULT_TEMPLATE}
 """
-        subagent = create_react_agent(model, tools, prompt=prompt)
+        subagent = create_agent(
+            model,
+            tools,
+            system_prompt=prompt,
+            middleware=build_agent_middleware(),
+        )
         result = await subagent.ainvoke(
             {"messages": [HumanMessage(content=task)]},
             config={"recursion_limit": 100},

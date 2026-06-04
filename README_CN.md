@@ -58,9 +58,107 @@ Sarma 运行在多种工作流之一；可随时切换，下一轮生效。
 |--------|----------|------|
 | `ruflo`（默认） | `uv run sarma` / `/workflow ruflo` | 主 agent 可委派 focused subagents 的对话工作流 |
 | `audit` | `uv run sarma workflow audit` / `/workflow audit` | 完整 harness:recon → hunt → validate（⇄ gapfill）→ dedupe → trace → feedback（↺ hunt）→ report |
-| `audit-slim` | `/workflow audit-slim` | 轻量三阶段:recon（负责审计）→ verify（确保结果真实可靠）→ report（验证结果并给用户反馈） |
+| `audit-slim` | `/workflow audit-slim` | 紧凑 harness：recon → hunter ⇄ verify → report |
 
 REPL 提示符会显示当前工作流：`sarma [ruflo]>`、`sarma [audit]>` 或 `sarma [audit-slim]>`。
+
+### Ruflo
+
+`ruflo` 是默认对话工作流。它运行一个 primary ReAct agent；必要时会把明确、聚焦的
+子任务委派给 subagents，然后把紧凑的 subagent 结果综合成面向用户的回答。
+
+```text
+user
+  ↓
+primary agent
+  ├─ optional delegate_task → focused subagent
+  ├─ optional delegate_task → focused subagent
+  └─ synthesize compact results → answer
+```
+
+`ruflo` 的 subagents 返回紧凑结果模板，而不是完整隐藏推理轨迹，避免委派任务把共享
+上下文撑爆。
+
+### Audit
+
+`audit` 是完整漏洞发现 harness。它包含 8 个 specialist agents，以及 3 个 router
+nodes：
+
+| Agent | 职责 |
+|-------|------|
+| `recon` | 探测二进制/项目架构、metadata、入口点、imports/exports、strings、functions 和 trust boundaries |
+| `hunt` | 搜索 dangerous sinks 和漏洞候选 |
+| `validate` | 确认候选是否可达、真实、且未被过滤或防护 |
+| `gapfill` | 识别覆盖缺口，并要求继续 hunt 或重新 validate |
+| `dedupe` | 合并重复 findings，并按 root cause 聚类 |
+| `trace` | 构建从外部输入到漏洞 sink 的数据流/控制流路径 |
+| `feedback` | 审查证据质量，把弱证据 findings 退回 hunt |
+| `report` | 生成最终漏洞报告 |
+
+执行图不是简单单向链路。`gapfill` 是 `validate` 的有界侧支，`feedback` 可以把弱
+findings 退回 `hunt`：
+
+```text
+START
+  ↓
+recon
+  ↓
+hunt
+  ↓
+validate
+  ↓
+validate_check
+  ├─ gaps / unresolved → gapfill → gapfill_check
+  │                         ├─ needs new candidates → hunt
+  │                         └─ needs re-check      → validate
+  └─ ok → dedupe
+          ↓
+        trace
+          ↓
+        feedback
+          ↓
+        feedback_check
+          ├─ weak / insufficient → hunt
+          └─ ok → report
+                    ↓
+                   END
+```
+
+循环有上限，保证 harness 一定收敛：`validate`/`gapfill` 最多循环 3 次；
+`feedback` 回到 `hunt` 最多 2 次。
+
+每个 audit agent 都会收到原始用户 audit task 和前序 `stage_outputs`。agent 之间
+不会传递前一个 agent 的完整 token/tool trace；共享的是结构化阶段结果，避免上下文
+失控。
+
+### Audit-Slim
+
+`audit-slim` 是用于快速审计的四阶段紧凑 harness：
+
+| Agent | 职责 |
+|-------|------|
+| `recon` | 探测整体架构/框架，并识别薄弱区域 |
+| `hunter` | 基于 recon 的薄弱区域执行漏洞审计 |
+| `verify` | 确认 hunter 的 findings 是否真实可靠 |
+| `report` | 只报告 verify 确认可靠的 findings |
+
+```text
+START
+  ↓
+recon
+  ↓
+hunter
+  ↓
+verify
+  ├─ needs-hunter / weak / unsupported → hunter
+  └─ verified → report
+                  ↓
+                 END
+```
+
+`hunter` 和 `verify` 构成反馈循环。`verify` 认为 findings 还不够可靠时，会以
+`needs-hunter` 开头并给出 hunter 必须处理的具体反馈；当 findings 可以进入报告时，
+以 `verified` 开头。`verify -> hunter` 循环最多 3 次。
 
 ## 斜杠命令
 

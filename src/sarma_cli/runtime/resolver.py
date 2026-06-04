@@ -44,6 +44,17 @@ class RuntimePolicyResolver:
         agent = self._agent_for(workflow, subagent)
         return self._model(agent.model or self._config.active_model)
 
+    def model_assignments_for(self, workflow: str) -> list[tuple[str, str]]:
+        """Return display-ready agent name to model id assignments."""
+        subagents = _subagents_for_workflow(workflow)
+        if not subagents:
+            provider = self.provider_for(workflow)
+            return [("primary", provider.model_name or "not configured")]
+        return [
+            (name, self.provider_for(workflow, name).model_name or "not configured")
+            for name in subagents
+        ]
+
     def resolve(self, workflow: str) -> RunPlan:
         from sarma_cli.resources.skills import load_skills
 

@@ -4,9 +4,10 @@ Replaces deepagents' create_deep_agent with an explicit StateGraph that
 orchestrates 8 specialist subagents through a vulnerability discovery
 pipeline with gapfill and feedback loops.
 
-Each subagent node wraps a ``create_react_agent`` and streams its events
-via ``get_stream_writer()`` so that the outer ``astream(subgraphs=True)``
-can attribute tokens and tool calls to the correct subagent.
+Each subagent node wraps a LangChain ``create_agent`` graph. The inner graph is
+streamed so the outer ``astream(subgraphs=True)`` can expose native token/tool
+events with the subagent namespace; ``get_stream_writer()`` is reserved for
+stage lifecycle events.
 """
 
 from __future__ import annotations
@@ -14,25 +15,27 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Any, Literal
 
+from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS, AUDIT_SUBAGENT_ORDER
 from sarma_cli.engine.models import ResolvedSkill
+from sarma_cli.runtime.middleware import build_agent_middleware
 
 DEFAULT_MAX_GAPFILL = 3
 DEFAULT_MAX_FEEDBACK = 2
 
 
-class AuditState(TypedDict):
+class AuditState(TypedDict, total=False):
     """State flowing through the audit pipeline."""
 
     messages: Annotated[list[BaseMessage], add_messages]
+    audit_task: str
     stage_outputs: dict[str, str]
     gapfill_count: int
     feedback_count: int
@@ -94,16 +97,38 @@ def _filter_tools_by_skill(
     return result
 
 
-def _build_context(stage_name: str, stage_outputs: dict[str, str]) -> str:
+def _build_context(
+    stage_name: str,
+    audit_task: str,
+    stage_outputs: dict[str, str],
+) -> str:
     """Build context message for a subagent from prior stage outputs."""
+    parts = [
+        "## Audit target / user request\n",
+        audit_task.strip() or "Audit the currently loaded target.",
+        "\n",
+    ]
     if not stage_outputs:
-        return "Begin the audit. No prior stage outputs yet."
-    parts = [f"## Prior stage outputs\n"]
-    for name, output in stage_outputs.items():
-        parts.append(f"### {name}\n{output[:4000]}\n")
+        parts.append("## Prior stage outputs\nNone yet.\n")
+    else:
+        parts.append("## Prior stage outputs\n")
+        for name, output in stage_outputs.items():
+            parts.append(f"### {name}\n{output[:4000]}\n")
     parts.append(f"\n## Your task\nYou are the **{stage_name}** agent. "
-                 "Proceed with your role based on the context above.")
+                 "Proceed with your role based on the user request and "
+                 "the prior stage outputs above. Do not rely on hidden "
+                 "tool traces from previous agents; only treat the prior "
+                 "stage outputs as shared evidence.")
     return "\n".join(parts)
+
+
+def _write_audit_event(data: dict[str, Any]) -> None:
+    """Emit audit progress when running under LangGraph streaming."""
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    writer(data)
 
 
 def _make_subagent_node(
@@ -134,52 +159,30 @@ def _make_subagent_node(
     prompt = spec["system_prompt"]
     if skill and skill.system_prompt_suffix:
         prompt = f"{prompt}\n\n{skill.system_prompt_suffix}"
-    agent = create_react_agent(model, tools, prompt=prompt)
+    agent = create_agent(
+        model,
+        tools,
+        system_prompt=prompt,
+        middleware=build_agent_middleware(),
+    )
 
     async def node(state: AuditState) -> dict[str, Any]:
         writer = get_stream_writer()
         writer({"type": "subagent_start", "name": name})
 
-        context = _build_context(name, state.get("stage_outputs", {}))
+        audit_task = state.get("audit_task", "")
+        context = _build_context(name, audit_task, state.get("stage_outputs", {}))
         input_messages = [HumanMessage(content=context)]
 
-        # Stream the inner agent so that tokens and tool calls are
-        # forwarded to the outer graph via custom events.
+        # Stream the inner agent so LangGraph can expose its native
+        # messages/updates through the outer graph when subgraphs=True.
         final_messages: list[BaseMessage] = []
         async for mode, data in agent.astream(
             {"messages": input_messages},
             stream_mode=["messages", "updates"],
         ):
             if mode == "messages":
-                # data is (message_chunk, metadata)
-                msg_chunk, _meta = data
-                # Skip ToolMessages (tool results) — not tokens.
-                if hasattr(msg_chunk, "tool_call_id") and msg_chunk.tool_call_id:
-                    continue
-                # Forward token content via custom event.
-                content = getattr(msg_chunk, "content", None)
-                if content and isinstance(content, str):
-                    # Skip if this message also has tool_calls (it's a
-                    # function-calling message, not a text response).
-                    if not getattr(msg_chunk, "tool_calls", None):
-                        writer({
-                            "type": "token",
-                            "subagent": name,
-                            "content": content,
-                        })
-                # Forward tool call chunks (only complete ones with a name).
-                tool_calls = getattr(msg_chunk, "tool_calls", None)
-                if tool_calls:
-                    for tc in tool_calls:
-                        tc_name = tc.get("name", "")
-                        if tc_name:
-                            writer({
-                                "type": "tool_call",
-                                "subagent": name,
-                                "tool_name": tc_name,
-                                "tool_call_id": tc.get("id", ""),
-                                "args": tc.get("args", {}),
-                            })
+                continue
             elif mode == "updates":
                 # Accumulate final messages from state deltas.
                 if isinstance(data, dict):
@@ -194,9 +197,9 @@ def _make_subagent_node(
 
         writer({"type": "subagent_complete", "name": name})
         return {
+            "audit_task": audit_task,
             "stage_outputs": new_outputs,
             "current_stage": name,
-            "messages": final_messages,
         }
 
     node.__name__ = name
@@ -217,7 +220,20 @@ def _validate_router(state: AuditState) -> Command[Literal["gapfill", "dedupe"]]
     count = state.get("gapfill_count", 0)
 
     if has_gaps and count < DEFAULT_MAX_GAPFILL:
-        return Command(update={"gapfill_count": count + 1}, goto="gapfill")
+        next_count = count + 1
+        _write_audit_event({
+            "type": "audit_route",
+            "from": "validate",
+            "to": "gapfill",
+            "loop": "gapfill",
+            "count": next_count,
+        })
+        return Command(update={"gapfill_count": next_count}, goto="gapfill")
+    _write_audit_event({
+        "type": "audit_route",
+        "from": "validate",
+        "to": "dedupe",
+    })
     return Command(goto="dedupe")
 
 
@@ -232,7 +248,13 @@ def _gapfill_router(state: AuditState) -> Command[Literal["hunt", "validate"]]:
     wants_hunt = any(k in lower for k in (
         "hunt", "search", "new candidate", "additional sink", "unexplored", "scan",
     ))
-    return Command(goto="hunt" if wants_hunt else "validate")
+    target = "hunt" if wants_hunt else "validate"
+    _write_audit_event({
+        "type": "audit_route",
+        "from": "gapfill",
+        "to": target,
+    })
+    return Command(goto=target)
 
 
 def _feedback_router(state: AuditState) -> Command[Literal["hunt", "report"]]:
@@ -250,10 +272,23 @@ def _feedback_router(state: AuditState) -> Command[Literal["hunt", "report"]]:
     count = state.get("feedback_count", 0)
 
     if is_weak and count < DEFAULT_MAX_FEEDBACK:
+        next_count = count + 1
+        _write_audit_event({
+            "type": "audit_route",
+            "from": "feedback",
+            "to": "hunt",
+            "loop": "feedback",
+            "count": next_count,
+        })
         return Command(
-            update={"feedback_count": count + 1, "gapfill_count": 0},
+            update={"feedback_count": next_count, "gapfill_count": 0},
             goto="hunt",
         )
+    _write_audit_event({
+        "type": "audit_route",
+        "from": "feedback",
+        "to": "report",
+    })
     return Command(goto="report")
 
 

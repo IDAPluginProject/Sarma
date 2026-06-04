@@ -15,32 +15,12 @@ from sarma_cli.config import CliConfig
 from sarma_cli.resources.skills import list_available_skills
 
 
-_BADGE_STYLES = (
-    "black on cyan",
-    "black on green",
-    "black on magenta",
-    "black on yellow",
-    "white on blue",
-)
-
-
 def _section(title: str) -> Text:
     return Text(title.upper(), style="bold dim")
 
 
 def _badge(label: str, style: str) -> Text:
     return Text(f" {label} ", style=style)
-
-
-def _badge_list(labels: Iterable[str], *, styles: tuple[str, ...]) -> Text:
-    badges = Text()
-    has_badges = False
-    for index, label in enumerate(labels):
-        has_badges = True
-        if index:
-            badges.append(" ")
-        badges.append_text(_badge(label, styles[index % len(styles)]))
-    return badges if has_badges else Text("none", style="dim")
 
 
 def _subtle_tags(labels: Iterable[str]) -> Text:
@@ -71,6 +51,69 @@ def _runtime_status(pool: Any | None, mcp_error: str) -> Text:
     if pool.is_connected:
         return Text("● connected", style="bold green")
     return Text("● not connected", style="yellow")
+
+
+def _server_status_text(status: Any) -> Text:
+    connected = bool(_status_value(status, "connected", False))
+    error = str(_status_value(status, "error", "") or "")
+    tool_count = int(_status_value(status, "tool_count", 0) or 0)
+    if connected:
+        text = Text("● connected", style="bold green")
+    elif error:
+        text = Text("● error", style="bold red")
+    else:
+        text = Text("○ not connected", style="yellow")
+    text.append(f"  {tool_count} tool{'s' if tool_count != 1 else ''}", style="dim")
+    return text
+
+
+def _status_value(status: Any, key: str, default: Any = None) -> Any:
+    if isinstance(status, dict):
+        return status.get(key, default)
+    return getattr(status, key, default)
+
+
+def _mcp_server_statuses(config: CliConfig, pool: Any | None, mcp_error: str) -> list[Any]:
+    enabled_servers = [server for server in config.mcp_servers if server.enabled]
+    if not enabled_servers:
+        return []
+
+    pool_statuses = list(getattr(pool, "server_statuses", []) or []) if pool else []
+    if pool_statuses:
+        by_name = {
+            str(_status_value(status, "name", "")): status
+            for status in pool_statuses
+        }
+        return [
+            by_name.get(
+                server.name,
+                {
+                    "name": server.name,
+                    "connected": False,
+                    "tool_count": 0,
+                    "error": mcp_error,
+                },
+            )
+            for server in enabled_servers
+        ]
+
+    connected = bool(getattr(pool, "is_connected", False)) if pool else False
+    tool_count = len(getattr(pool, "tools", []) or []) if pool and len(enabled_servers) == 1 else 0
+    return [
+        {
+            "name": server.name,
+            "connected": connected and not mcp_error,
+            "tool_count": tool_count if connected and not mcp_error else 0,
+            "error": mcp_error,
+        }
+        for server in enabled_servers
+    ]
+
+
+def _count_summary(count: int, singular: str, plural: str | None = None) -> Text:
+    label = singular if count == 1 else (plural or f"{singular}s")
+    style = "bold green" if count else "dim"
+    return Text(f"{count} {label}", style=style)
 
 
 def _workspace_path(path: Path) -> Text:
@@ -118,8 +161,8 @@ def render_status_panel(
         model.append(f"  via {provider.name}", style="dim")
 
     enabled_servers = [server for server in config.mcp_servers if server.enabled]
-    server_labels = [f"{server.name} ({server.transport})" for server in enabled_servers]
-    tool_names = [getattr(tool, "name", str(tool)) for tool in (pool.tools if pool else [])]
+    tool_count = len(pool.tools) if pool else 0
+    server_statuses = _mcp_server_statuses(config, pool, mcp_error)
     skills = list_available_skills()
 
     provider_card = _card(
@@ -130,14 +173,17 @@ def render_status_panel(
             ("api key", _masked_api_key(provider.api_key)),
         ),
     )
-    runtime_card = _card(
-        "Runtime",
-        (
-            ("mcp", _runtime_status(pool, mcp_error)),
-            ("servers", _badge_list(server_labels, styles=_BADGE_STYLES)),
-            ("tools", _subtle_tags(tool_names) if tool_names else Text("none loaded", style="dim")),
-        ),
-    )
+    runtime_rows: list[tuple[str, Any]] = [
+        ("mcp", _runtime_status(pool, mcp_error)),
+        ("servers", _count_summary(len(enabled_servers), "enabled")),
+        ("tools", _count_summary(tool_count, "tool")),
+    ]
+    for status in server_statuses:
+        runtime_rows.append((
+            str(_status_value(status, "name", "mcp")),
+            _server_status_text(status),
+        ))
+    runtime_card = _card("Runtime", runtime_rows)
     workspace_card = _card(
         "Workspace",
         (

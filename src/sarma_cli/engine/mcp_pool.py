@@ -5,12 +5,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from sarma_cli.engine.errors import McpConnectionError
 
 logger = logging.getLogger(__name__)
 DEFAULT_MCP_CONNECT_TIMEOUT = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class McpServerStatus:
+    """Connection summary for one configured MCP server."""
+
+    name: str
+    connected: bool
+    tool_count: int = 0
+    error: str = ""
 
 
 def _config_fingerprint(configs: dict[str, dict[str, Any]]) -> str:
@@ -43,6 +54,7 @@ class McpClientPool:
         self._config_fingerprint: str = ""
         self._tools: list[Any] = []  # list[BaseTool]
         self._connected: bool = False
+        self._server_statuses: dict[str, McpServerStatus] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -51,6 +63,10 @@ class McpClientPool:
     @property
     def tools(self) -> list[Any]:
         return list(self._tools)
+
+    @property
+    def server_statuses(self) -> list[McpServerStatus]:
+        return list(self._server_statuses.values())
 
     async def connect(
         self, server_configs: dict[str, dict[str, Any]]
@@ -70,6 +86,10 @@ class McpClientPool:
 
         self._server_configs = dict(server_configs)
         self._config_fingerprint = fingerprint
+        self._server_statuses = {
+            name: McpServerStatus(name=name, connected=False)
+            for name in server_configs
+        }
 
         if not server_configs:
             self._tools = []
@@ -87,6 +107,14 @@ class McpClientPool:
                 timeout=_connect_timeout(server_configs),
             )
             self._connected = True
+            self._server_statuses = {
+                name: McpServerStatus(
+                    name=name,
+                    connected=True,
+                    tool_count=self._count_server_tools(name),
+                )
+                for name in server_configs
+            }
             logger.info(
                 "MCP pool connected: %d tools from %d servers",
                 len(self._tools),
@@ -95,6 +123,15 @@ class McpClientPool:
             return self._tools
         except Exception as exc:
             await self.disconnect()
+            self._server_configs = dict(server_configs)
+            self._server_statuses = {
+                name: McpServerStatus(
+                    name=name,
+                    connected=False,
+                    error=str(exc),
+                )
+                for name in server_configs
+            }
             logger.error("MCP pool connection failed: %s", exc)
             raise McpConnectionError(
                 ", ".join(server_configs.keys()), str(exc)
@@ -119,6 +156,10 @@ class McpClientPool:
         self._tools = []
         self._connected = False
         self._config_fingerprint = ""
+        self._server_statuses = {
+            name: McpServerStatus(name=name, connected=False)
+            for name in self._server_configs
+        }
 
     def filter_tools(
         self,
@@ -133,3 +174,20 @@ class McpClientPool:
         if denylist is not None:
             result = [t for t in result if t.name not in denylist]
         return result
+
+    def _count_server_tools(self, server_name: str) -> int:
+        return sum(
+            1
+            for tool in self._tools
+            if _tool_belongs_to_server(getattr(tool, "name", ""), server_name)
+        )
+
+
+def _tool_belongs_to_server(tool_name: str, server_name: str) -> bool:
+    return (
+        tool_name == server_name
+        or tool_name.startswith(f"{server_name}_")
+        or tool_name.startswith(f"{server_name}__")
+        or tool_name.startswith(f"{server_name}.")
+        or tool_name.startswith(f"{server_name}:")
+    )

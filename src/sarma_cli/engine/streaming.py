@@ -54,11 +54,18 @@ def _init_known_subagents() -> None:
     """Lazily populate known subagent names from audit_subagents."""
     global _KNOWN_SUBAGENTS
     if not _KNOWN_SUBAGENTS:
+        names: set[str] = set()
         try:
             from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENT_ORDER
-            _KNOWN_SUBAGENTS = set(AUDIT_SUBAGENT_ORDER)
+            names.update(AUDIT_SUBAGENT_ORDER)
         except ImportError:
             pass
+        try:
+            from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENT_ORDER
+            names.update(AUDIT_SLIM_SUBAGENT_ORDER)
+        except ImportError:
+            pass
+        _KNOWN_SUBAGENTS = names
 
 
 def _resolve_subagent_from_ns(
@@ -75,12 +82,16 @@ def _resolve_subagent_from_ns(
         return ORCHESTRATOR
     _init_known_subagents()
     first = ns[0] if ns else ""
-    if isinstance(first, str) and first in _KNOWN_SUBAGENTS:
-        return first
+    first_name = _subagent_name_from_ns_segment(first)
+    if first_name:
+        return first_name
     # Fallback: check tool_call_id mapping (handles "tools:<id>" segments)
     for seg in ns:
         if not isinstance(seg, str):
             continue
+        seg_name = _subagent_name_from_ns_segment(seg)
+        if seg_name:
+            return seg_name
         # Try direct lookup
         name = tool_call_to_subagent.get(seg)
         if name:
@@ -92,6 +103,17 @@ def _resolve_subagent_from_ns(
             if name:
                 return name
     return ORCHESTRATOR
+
+
+def _subagent_name_from_ns_segment(segment: Any) -> str:
+    if not isinstance(segment, str):
+        return ""
+    _init_known_subagents()
+    # LangGraph v2 namespace segments are often "node_name:<task_uuid>".
+    node_name = segment.split(":", 1)[0]
+    if node_name in _KNOWN_SUBAGENTS:
+        return node_name
+    return ""
 
 
 class EventTranslator:
@@ -164,7 +186,7 @@ class EventTranslator:
         _init_known_subagents()
         if not ns:
             return []
-        first = ns[0] if isinstance(ns[0], str) else ""
+        first = _subagent_name_from_ns_segment(ns[0])
         if first not in _KNOWN_SUBAGENTS:
             return []
         if first == self._active_subagent:
@@ -499,6 +521,19 @@ class EventTranslator:
                     },
                     timestamp=time.time(),
                 )]
+
+        # --- Audit graph route decisions ---
+        if event_subtype == "audit_route":
+            return [StreamEvent(
+                type=StreamEventType.CUSTOM_PROGRESS,
+                conversation_id=self._conv,
+                turn_id=self._turn,
+                payload={
+                    "data": data,
+                    "subagent": source,
+                },
+                timestamp=time.time(),
+            )]
 
         # --- Forwarded token from inner subagent astream ---
         if event_subtype == "token":

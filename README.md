@@ -59,9 +59,109 @@ Sarma runs in one of several workflows; switch at any time, effective on the nex
 |----------|--------------|--------------|
 | `ruflo` (default) | `uv run sarma` / `/workflow ruflo` | Conversational primary agent with focused subagent delegation |
 | `audit` | `uv run sarma workflow audit` / `/workflow audit` | Full harness: recon → hunt → validate (⇄ gapfill) → dedupe → trace → feedback (↺ hunt) → report |
-| `audit-slim` | `/workflow audit-slim` | Lightweight 3-stage pass: recon (audits) → verify (confirms reliability) → report (validates + user feedback) |
+| `audit-slim` | `/workflow audit-slim` | Compact harness: recon → hunter ⇄ verify → report |
 
 The REPL prompt shows the active workflow: `sarma [ruflo]>`, `sarma [audit]>`, or `sarma [audit-slim]>`.
+
+### Ruflo
+
+`ruflo` is the default conversational workflow. It runs a primary ReAct agent
+that can delegate focused tasks to subagents when useful, then synthesizes the
+compact subagent results into the user-facing answer.
+
+```text
+user
+  ↓
+primary agent
+  ├─ optional delegate_task → focused subagent
+  ├─ optional delegate_task → focused subagent
+  └─ synthesize compact results → answer
+```
+
+Subagents in `ruflo` return compact result templates rather than full hidden
+reasoning traces, so delegation does not flood the shared context.
+
+### Audit
+
+`audit` is the full vulnerability discovery harness. It uses eight specialist
+agents plus three router nodes:
+
+| Agent | Role |
+|-------|------|
+| `recon` | Survey binary/project architecture, metadata, entry points, imports/exports, strings, functions, and trust boundaries |
+| `hunt` | Search for dangerous sinks and vulnerability candidates |
+| `validate` | Confirm candidates are reachable, real, and not already sanitized |
+| `gapfill` | Identify coverage gaps and request more hunt or validation work |
+| `dedupe` | Merge duplicate findings and cluster related root causes |
+| `trace` | Build data/control-flow paths from external inputs to vulnerable sinks |
+| `feedback` | Review evidence quality and send weak findings back for another hunt pass |
+| `report` | Produce the final vulnerability report |
+
+The graph is not a simple line. `gapfill` is a bounded side branch off
+`validate`, and `feedback` can send weak findings back to `hunt`:
+
+```text
+START
+  ↓
+recon
+  ↓
+hunt
+  ↓
+validate
+  ↓
+validate_check
+  ├─ gaps / unresolved → gapfill → gapfill_check
+  │                         ├─ needs new candidates → hunt
+  │                         └─ needs re-check      → validate
+  └─ ok → dedupe
+          ↓
+        trace
+          ↓
+        feedback
+          ↓
+        feedback_check
+          ├─ weak / insufficient → hunt
+          └─ ok → report
+                    ↓
+                   END
+```
+
+Loop limits keep the harness finite: `validate`/`gapfill` can loop up to 3
+times, and `feedback` can return to `hunt` up to 2 times.
+
+Each audit agent receives the original user audit task plus prior
+`stage_outputs`. Agents do not receive the full token/tool trace from previous
+agents; they share structured stage results to keep context bounded.
+
+### Audit-Slim
+
+`audit-slim` is a compact four-stage harness for faster passes:
+
+| Agent | Role |
+|-------|------|
+| `recon` | Probe the overall architecture/framework and identify weak areas |
+| `hunter` | Audit vulnerabilities in the weak areas from recon |
+| `verify` | Confirm whether hunter's findings are real and reliable |
+| `report` | Report only findings verified as reliable |
+
+```text
+START
+  ↓
+recon
+  ↓
+hunter
+  ↓
+verify
+  ├─ needs-hunter / weak / unsupported → hunter
+  └─ verified → report
+                  ↓
+                 END
+```
+
+`hunter` and `verify` form the feedback loop. `verify` starts its output with
+`needs-hunter` when findings are not reliable enough and gives concrete
+feedback for `hunter`; it starts with `verified` when findings are ready for
+`report`. The verify-to-hunter loop is capped at 3 iterations.
 
 ## Slash commands
 

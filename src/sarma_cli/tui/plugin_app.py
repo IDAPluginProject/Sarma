@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import Screen
 from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Select, Static
 
 from sarma_cli.config import CliConfig, McpServerConfig
@@ -42,8 +43,8 @@ class PluginEditResult:
     restart_requested: bool = False
 
 
-class PluginApp(App[PluginEditResult | None]):
-    """Full-screen plugin manager."""
+class PluginViewMixin:
+    """Shared plugin manager view for standalone and embedded TUI usage."""
 
     BINDINGS = [
         ("ctrl+s", "save", "Save"),
@@ -167,14 +168,17 @@ class PluginApp(App[PluginEditResult | None]):
             self._show_mcp_transport_fields(str(event.value))
 
     def action_save(self) -> None:
-        self.exit(PluginEditResult(
+        self._finish(PluginEditResult(
             mcp_servers=deepcopy(self.mcp_servers),
             changed=self.changed,
             restart_requested=self.restart_requested or self.changed,
         ))
 
     def action_cancel(self) -> None:
-        self.exit(None)
+        self._finish(None)
+
+    def _finish(self, result: PluginEditResult | None) -> None:
+        raise NotImplementedError
 
     async def _apply_mcp(self) -> None:
         try:
@@ -457,6 +461,20 @@ async def _check_mcp_server(server: McpServerConfig) -> list[object]:
         return await pool.connect({server.name: dto.to_langchain_config()})
     finally:
         await pool.disconnect()
+
+
+class PluginScreen(PluginViewMixin, Screen[PluginEditResult | None]):
+    """Embeddable plugin manager for the full-screen MainApp."""
+
+    def _finish(self, result: PluginEditResult | None) -> None:
+        self.dismiss(result)
+
+
+class PluginApp(PluginViewMixin, App[PluginEditResult | None]):
+    """Standalone plugin manager."""
+
+    def _finish(self, result: PluginEditResult | None) -> None:
+        self.exit(result)
 
 
 async def manage_plugins_tui(config: CliConfig) -> PluginEditResult | None:

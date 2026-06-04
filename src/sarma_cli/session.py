@@ -174,6 +174,8 @@ class Session:
             system_prompt=run_plan.system_prompt,
         )
 
+        runner_history = list(self._history)
+
         # Persist user message
         self._store.save_message(
             self._conversation_id, turn_id, "user", user_message
@@ -189,7 +191,7 @@ class Session:
             provider=run_plan.provider,
             enabled_servers=run_plan.enabled_servers,
             skill=run_plan.skill,
-            history=self._history,
+            history=runner_history,
             system_prompt=run_plan.system_prompt,
             conversation_id=self._conversation_id,
             turn_id=turn_id,
@@ -328,6 +330,16 @@ class Session:
             name = payload.get("subagent", "")
             if name:
                 self._graph_state["failed"] = name
+
+        elif etype == StreamEventType.CUSTOM_PROGRESS:
+            data = payload.get("data", {})
+            if isinstance(data, dict) and data.get("type") == "audit_route":
+                loop = data.get("loop", "")
+                count = data.get("count")
+                if loop == "gapfill" and count is not None:
+                    self._graph_state["gapfill_loops"] = int(count)
+                elif loop == "feedback" and count is not None:
+                    self._graph_state["feedback_loops"] = int(count)
 
     async def close(self) -> None:
         await self._pool.disconnect()

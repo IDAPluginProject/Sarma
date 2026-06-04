@@ -1,4 +1,4 @@
-"""Audit-Slim workflow — minimal 3-stage linear pipeline."""
+"""Audit-Slim workflow — compact 4-stage feedback pipeline."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from sarma_cli.engine.audit_slim_subagents import (
 
 
 class AuditSlimWorkflow(Workflow):
-    """Lightweight 3-stage audit: recon -> verify -> report (no loops)."""
+    """Lightweight audit: recon -> hunter <-> verify -> report."""
 
     def __init__(self) -> None:
         super().__init__(
             name="audit-slim",
-            description="Lightweight 3-stage audit (recon -> verify -> report)",
+            description="Lightweight audit (recon -> hunter <-> verify -> report)",
         )
         self._stages = list(AUDIT_SLIM_SUBAGENT_ORDER)
         self._descriptions = {s["name"]: s["description"] for s in AUDIT_SLIM_SUBAGENTS}
@@ -29,6 +29,7 @@ class AuditSlimWorkflow(Workflow):
         current = kwargs.get("current_stage", "")
         completed = kwargs.get("completed", set())
         failed = kwargs.get("failed", None)
+        feedback_loops = kwargs.get("feedback_loops", 0)
 
         text = Text()
         for i, stage in enumerate(self._stages):
@@ -52,6 +53,11 @@ class AuditSlimWorkflow(Workflow):
                 text.append(f"  {desc}", style=desc_style)
             text.append("\n")
             if stage != self._stages[-1]:
-                text.append("       │\n", style="dim")
+                if stage == "hunter":
+                    text.append("       ↕ feedback with verify\n", style="dim")
+                    if feedback_loops:
+                        text.append(f"       ↺ verify → hunter ×{feedback_loops}\n", style="#d29922")
+                else:
+                    text.append("       │\n", style="dim")
 
         return Panel(text, title="[bold bright_blue]Audit-Slim[/]", border_style="#a371f7", expand=False)
