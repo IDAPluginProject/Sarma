@@ -142,15 +142,11 @@ class RuntimePolicyResolver:
 
 
 def _subagents_for_workflow(workflow: str) -> list[str]:
-    if workflow == "audit":
-        from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENT_ORDER
+    from sarma_cli.workflows import get_registry, init_workflows
 
-        return list(AUDIT_SUBAGENT_ORDER)
-    if workflow == "audit-slim":
-        from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENT_ORDER
-
-        return list(AUDIT_SLIM_SUBAGENT_ORDER)
-    return []
+    init_workflows()
+    registered = get_registry().get(workflow)
+    return list(registered.subagents) if registered else []
 
 
 def _provider_to_dto(provider: ProviderConfig) -> ModelProviderDTO:

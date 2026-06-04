@@ -225,6 +225,75 @@ def test_audit_stage_context_uses_task_and_prior_outputs_only() -> None:
     assert "hidden tool traces" in context
 
 
+def test_audit_route_parser_prefers_structured_route_json() -> None:
+    from sarma_cli.engine.audit_graph import _route_next
+
+    assert _route_next(
+        'ROUTE_JSON: {"next":"gapfill","reason":"missing coverage"}',
+        {"gapfill", "dedupe"},
+    ) == "gapfill"
+    assert _route_next("decision: report", {"hunt", "report"}) == "report"
+    assert _route_next("weak but malformed", {"hunt", "report"}) == ""
+
+
+@pytest.mark.anyio
+async def test_audit_structured_router_uses_response_format_result() -> None:
+    from sarma_cli.engine.audit_graph import (
+        RouteDecision,
+        _route_next_structured,
+        _route_value_from_structured_response,
+    )
+
+    class FakeRouteAgent:
+        async def ainvoke(self, payload: dict[str, object], **_kwargs: object) -> dict[str, object]:
+            messages = payload["messages"]
+            assert messages
+            return {
+                "structured_response": RouteDecision(
+                    next="report",
+                    reason="verified finding",
+                )
+            }
+
+    assert _route_value_from_structured_response(
+        {"next": "hunter", "reason": "needs work"},
+        {"hunter", "report"},
+    ) == "hunter"
+    assert await _route_next_structured(
+        FakeRouteAgent(),
+        stage="verify",
+        output="At least one finding is reliable and ready for reporting.",
+        allowed={"hunter", "report"},
+    ) == "report"
+
+
+def test_audit_prompts_no_longer_require_route_json_in_visible_output() -> None:
+    from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS
+    from sarma_cli.engine.audit_slim_subagents import AUDIT_SLIM_SUBAGENTS
+
+    prompts = [
+        *(agent["system_prompt"] for agent in AUDIT_SUBAGENTS),
+        *(agent["system_prompt"] for agent in AUDIT_SLIM_SUBAGENTS),
+    ]
+
+    assert all("ROUTE_JSON" not in prompt for prompt in prompts)
+
+
+def test_workflow_metadata_owns_subagent_order() -> None:
+    from sarma_cli.workflows import get_registry, init_workflows
+
+    init_workflows()
+
+    assert get_registry().get("ruflo").subagents == ()
+    assert get_registry().get("audit").subagents[:3] == ("recon", "hunt", "validate")
+    assert get_registry().get("audit-slim").subagents == (
+        "recon",
+        "hunter",
+        "verify",
+        "report",
+    )
+
+
 def test_audit_route_events_update_graph_loop_counts(monkeypatch) -> None:
     workspace = Path("build/test-audit-route-state").resolve()
     shutil.rmtree(workspace, ignore_errors=True)
@@ -272,6 +341,7 @@ async def test_audit_graph_streams_subagent_tokens_once() -> None:
             "hello from report",
         ]),
         [],
+        structured_routing=False,
     )
     translator = EventTranslator("c1", "t1")
     tokens_by_subagent: dict[str, list[str]] = {}
@@ -494,6 +564,7 @@ def test_store_rejects_unknown_conversation_update_field(monkeypatch) -> None:
     monkeypatch.chdir(workspace)
 
     store = Store()
+    assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 1
     cid = store.create_conversation()
 
     with pytest.raises(ValueError):
@@ -626,7 +697,14 @@ def test_default_agent_middleware_uses_current_workspace_filesystem(
 ) -> None:
     from deepagents.backends import FilesystemBackend
     from deepagents.middleware import FilesystemMiddleware
-    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware import (
+        FilesystemFileSearchMiddleware,
+        ModelCallLimitMiddleware,
+        ModelRetryMiddleware,
+        TodoListMiddleware,
+        ToolCallLimitMiddleware,
+        ToolRetryMiddleware,
+    )
     from langchain.agents.middleware.shell_tool import ShellToolMiddleware
 
     workspace = Path("build/test-default-agent-middleware").resolve()
@@ -636,14 +714,22 @@ def test_default_agent_middleware_uses_current_workspace_filesystem(
     try:
         middleware = build_agent_middleware()
 
-        assert len(middleware) == 3
+        assert len(middleware) == 6
         assert isinstance(middleware[0], TodoListMiddleware)
-        assert isinstance(middleware[1], FilesystemMiddleware)
-        assert isinstance(middleware[1].backend, FilesystemBackend)
-        assert middleware[1].backend.cwd == workspace
-        assert middleware[1].backend.virtual_mode is True
-        assert isinstance(middleware[2], ShellToolMiddleware)
-        assert middleware[2]._workspace_root == workspace
+        assert isinstance(middleware[1], FilesystemFileSearchMiddleware)
+        assert middleware[1].root_path == workspace
+        assert isinstance(middleware[2], FilesystemMiddleware)
+        assert isinstance(middleware[2].backend, FilesystemBackend)
+        assert middleware[2].backend.cwd == workspace
+        assert middleware[2].backend.virtual_mode is True
+        assert isinstance(middleware[3], ShellToolMiddleware)
+        assert middleware[3]._workspace_root == workspace
+        assert isinstance(middleware[4], ModelRetryMiddleware)
+        assert isinstance(middleware[5], ToolRetryMiddleware)
+        assert not any(
+            isinstance(item, (ModelCallLimitMiddleware, ToolCallLimitMiddleware))
+            for item in middleware
+        )
     finally:
         monkeypatch.chdir(Path(__file__).resolve().parents[1])
         shutil.rmtree(workspace, ignore_errors=True)
@@ -659,7 +745,12 @@ def test_model_agent_middleware_adds_context_and_quality_helpers(
         SummarizationMiddleware,
         SummarizationToolMiddleware,
     )
-    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware import (
+        FilesystemFileSearchMiddleware,
+        ModelRetryMiddleware,
+        TodoListMiddleware,
+        ToolRetryMiddleware,
+    )
     from langchain.agents.middleware.shell_tool import ShellToolMiddleware
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
@@ -672,20 +763,42 @@ def test_model_agent_middleware_adds_context_and_quality_helpers(
             FakeListChatModel(responses=["summary"])
         )
 
-        assert len(middleware) == 6
+        assert len(middleware) == 9
         assert isinstance(middleware[0], TodoListMiddleware)
-        assert isinstance(middleware[1], FilesystemMiddleware)
-        assert isinstance(middleware[1].backend, FilesystemBackend)
-        assert middleware[1].backend.cwd == workspace
-        assert middleware[1].backend.virtual_mode is True
-        assert isinstance(middleware[2], ShellToolMiddleware)
-        assert middleware[2]._workspace_root == workspace
-        assert isinstance(middleware[3], SummarizationMiddleware)
-        assert isinstance(middleware[4], SummarizationToolMiddleware)
-        assert isinstance(middleware[5], RubricMiddleware)
+        assert isinstance(middleware[1], FilesystemFileSearchMiddleware)
+        assert middleware[1].root_path == workspace
+        assert isinstance(middleware[2], FilesystemMiddleware)
+        assert isinstance(middleware[2].backend, FilesystemBackend)
+        assert middleware[2].backend.cwd == workspace
+        assert middleware[2].backend.virtual_mode is True
+        assert isinstance(middleware[3], ShellToolMiddleware)
+        assert middleware[3]._workspace_root == workspace
+        assert isinstance(middleware[4], ModelRetryMiddleware)
+        assert isinstance(middleware[5], ToolRetryMiddleware)
+        assert isinstance(middleware[6], SummarizationMiddleware)
+        assert isinstance(middleware[7], SummarizationToolMiddleware)
+        assert isinstance(middleware[8], RubricMiddleware)
     finally:
         monkeypatch.chdir(Path(__file__).resolve().parents[1])
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_agent_runtime_services_expose_state_without_cache() -> None:
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from sarma_cli.runtime.services import AgentRuntimeServices
+
+    services = AgentRuntimeServices.create()
+    agent_kwargs = services.create_agent_kwargs()
+    compile_kwargs = services.compile_kwargs()
+
+    assert isinstance(agent_kwargs["checkpointer"], InMemorySaver)
+    assert isinstance(agent_kwargs["store"], InMemoryStore)
+    assert agent_kwargs["checkpointer"] is compile_kwargs["checkpointer"]
+    assert agent_kwargs["store"] is compile_kwargs["store"]
+    assert "cache" not in agent_kwargs
+    assert "transformers" not in agent_kwargs
 
 
 def test_compaction_trigger_uses_model_context_budget(monkeypatch) -> None:

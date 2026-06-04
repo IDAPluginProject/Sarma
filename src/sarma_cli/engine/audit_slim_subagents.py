@@ -79,11 +79,10 @@ AUDIT_SLIM_SUBAGENTS: list[dict[str, Any]] = [
             "so every accepted vulnerability is real, reliable, and practically "
             "valid.  If at least one vulnerability is real and reliable, the "
             "stage can pass with that confirmed finding.\n\n"
-            "Routing contract: if the findings are not yet real/reliable, "
-            "start your answer with `needs-hunter` and give concrete feedback "
-            "Hunter must act on.  If at least one finding is confirmed and "
-            "ready for reporting, start your answer with `verified` and list "
-            "only the confirmed findings with evidence."
+            "If the findings are not yet real/reliable, give concrete "
+            "feedback Hunter must act on.  If at least one finding is "
+            "confirmed and ready for reporting, list only the confirmed "
+            "findings with evidence and say they are ready for reporting."
         ),
         "_tool_prefixes": [
             "decompile", "disasm", "get_basic_blocks",

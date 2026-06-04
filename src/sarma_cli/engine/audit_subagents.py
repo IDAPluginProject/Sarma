@@ -79,7 +79,9 @@ AUDIT_SUBAGENTS: list[dict[str, Any]] = [
             "accepted vulnerability is real, reliable, and practically valid.  "
             "If at least one vulnerability is real and reliable, the stage can "
             "pass with that confirmed finding.  Mark each candidate as "
-            "confirmed, rejected, or needs-more-analysis."
+            "confirmed, rejected, or needs-more-analysis.  Clearly state "
+            "whether the current evidence is ready for deduplication or "
+            "whether more gap-filling work is required."
         ),
         "_tool_prefixes": [
             "decompile", "disasm", "get_basic_blocks",

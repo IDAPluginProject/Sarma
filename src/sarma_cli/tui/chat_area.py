@@ -61,6 +61,9 @@ class AssistantMessage(Static):
         self.speaker = speaker
         self._buffer: list[str] = []
         self._reasoning_buffer: list[str] = []
+        self.raw_content = ""
+        self.raw_reasoning = ""
+        self._render_pending = False
 
     def compose(self):
         yield Static(
@@ -81,20 +84,22 @@ class AssistantMessage(Static):
 
     def feed_token(self, token: str) -> None:
         self._buffer.append(token)
-        self._update_body(self._render_text())
+        self.raw_content = "".join(self._buffer)
+        self._schedule_render()
 
     def feed_reasoning(self, token: str) -> None:
         self._reasoning_buffer.append(token)
+        self.raw_reasoning = "".join(self._reasoning_buffer)
 
     def has_visible_content(self) -> bool:
         return bool("".join(self._buffer).strip())
 
     def flush(self) -> str:
         content = "".join(self._buffer)
-        self._buffer.clear()
-
         reasoning = "".join(self._reasoning_buffer)
-        self._reasoning_buffer.clear()
+        self.raw_content = content
+        self.raw_reasoning = reasoning
+        self._render_pending = False
 
         if content.strip() or reasoning.strip():
             self._update_body(self._render_final(content, reasoning))
@@ -118,6 +123,16 @@ class AssistantMessage(Static):
             self.query_one(".assistant-body", Static).update(content)
         except NoMatches:
             return
+
+    def _schedule_render(self) -> None:
+        if self._render_pending:
+            return
+        self._render_pending = True
+        self.set_timer(0.05, self._flush_stream_render)
+
+    def _flush_stream_render(self) -> None:
+        self._render_pending = False
+        self._update_body(self._render_text())
 
 
 class ToolCallWidget(Collapsible):
@@ -220,6 +235,7 @@ class ChatArea(VerticalScroll):
     def __init__(self) -> None:
         super().__init__(id="chat-area")
         self._current_assistant: AssistantMessage | None = None
+        self._assistant_raw_history: list[str] = []
         self._tool_calls: dict[str, ToolCallWidget] = {}
         self._tool_counter = 0
         self._auto_follow = True
@@ -266,6 +282,8 @@ class ChatArea(VerticalScroll):
         if self._current_assistant is None:
             return ""
         content = self._current_assistant.flush()
+        if content:
+            self._assistant_raw_history.append(content)
         self._current_assistant = None
         return content
 
@@ -351,6 +369,11 @@ class ChatArea(VerticalScroll):
         self.remove_children()
         self._current_assistant = None
         self._tool_calls.clear()
+        self._assistant_raw_history.clear()
+
+    def last_assistant_raw(self) -> str:
+        """Return the most recent finalized assistant markdown."""
+        return self._assistant_raw_history[-1] if self._assistant_raw_history else ""
 
     def should_follow(self) -> bool:
         """Return whether new content should keep the viewport at the bottom."""

@@ -37,19 +37,30 @@ def _build_agent_middleware(model: Any | None) -> tuple[Any, ...]:
         SummarizationMiddleware,
         SummarizationToolMiddleware,
     )
-    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware import (
+        FilesystemFileSearchMiddleware,
+        ModelRetryMiddleware,
+        TodoListMiddleware,
+        ToolRetryMiddleware,
+    )
     from langchain.agents.middleware.shell_tool import ShellToolMiddleware
 
     workspace_root = Path.cwd()
     backend = FilesystemBackend(root_dir=workspace_root, virtual_mode=True)
     middleware: list[Any] = [
         TodoListMiddleware(),
+        FilesystemFileSearchMiddleware(
+            root_path=str(workspace_root),
+            use_ripgrep=shutil.which("rg") is not None,
+        ),
         FilesystemMiddleware(backend=backend),
         ShellToolMiddleware(
             workspace_root=workspace_root,
             shell_command=_shell_command(),
             tool_name="shell",
         ),
+        ModelRetryMiddleware(max_retries=2),
+        ToolRetryMiddleware(max_retries=2),
     ]
 
     if model is None:

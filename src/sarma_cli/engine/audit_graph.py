@@ -12,7 +12,8 @@ stage lifecycle events.
 
 from __future__ import annotations
 
-import operator
+import asyncio
+import json
 from typing import Annotated, Any, Literal
 
 from langchain.agents import create_agent
@@ -22,6 +23,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.types import Command
 from typing_extensions import TypedDict
+from pydantic import BaseModel, Field
 
 from sarma_cli.engine.audit_subagents import AUDIT_SUBAGENTS, AUDIT_SUBAGENT_ORDER
 from sarma_cli.engine.models import ResolvedSkill
@@ -29,6 +31,21 @@ from sarma_cli.runtime.middleware import build_agent_middleware_for_model
 
 DEFAULT_MAX_GAPFILL = 3
 DEFAULT_MAX_FEEDBACK = 2
+DEFAULT_ROUTE_TIMEOUT = 30.0
+
+ROUTE_ROUTER_PROMPT = (
+    "You are Sarma's audit workflow router. Read the completed stage output "
+    "and choose the next workflow node from the allowed options. Return only "
+    "the structured response requested by the caller. Do not summarize the "
+    "audit and do not invent findings."
+)
+
+
+class RouteDecision(BaseModel):
+    """Structured routing decision returned by a lightweight router agent."""
+
+    next: str = Field(description="Next workflow node name.")
+    reason: str = Field(default="", description="Brief reason for the route.")
 
 
 class AuditState(TypedDict, total=False):
@@ -131,6 +148,106 @@ def _write_audit_event(data: dict[str, Any]) -> None:
     writer(data)
 
 
+def _route_next(output: str, allowed: set[str]) -> str:
+    """Extract a structured route decision from a stage output."""
+    for line in output.splitlines()[:12]:
+        text = line.strip()
+        if not text:
+            continue
+        if text.lower().startswith("route_json:"):
+            text = text.split(":", 1)[1].strip()
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            value = (
+                data.get("next")
+                or data.get("route")
+                or data.get("target")
+                or data.get("decision")
+            )
+            if isinstance(value, str) and value.strip().lower() in allowed:
+                return value.strip().lower()
+        if ":" in text:
+            key, value = text.split(":", 1)
+            if key.strip().lower() in {"next", "route", "target", "decision"}:
+                value = value.strip().lower()
+                if value in allowed:
+                    return value
+    return ""
+
+
+def _route_value_from_structured_response(
+    response: Any,
+    allowed: set[str],
+) -> str:
+    """Normalize a structured route response into a valid next-node name."""
+    if isinstance(response, RouteDecision):
+        value = response.next
+    elif isinstance(response, dict):
+        value = (
+            response.get("next")
+            or response.get("route")
+            or response.get("target")
+            or response.get("decision")
+        )
+    else:
+        value = getattr(response, "next", None)
+    if isinstance(value, str) and value.strip().lower() in allowed:
+        return value.strip().lower()
+    return ""
+
+
+async def _route_next_structured(
+    route_agent: Any,
+    *,
+    stage: str,
+    output: str,
+    allowed: set[str],
+) -> str:
+    """Ask the same-model structured router for the next workflow node.
+
+    This keeps audit subagent output human-readable while moving branch
+    decisions off prompt-parsed markdown. If a provider does not support the
+    structured-output strategy, callers can fall back to local parsing.
+    """
+    if not output.strip():
+        return ""
+    prompt = (
+        f"Stage: {stage}\n"
+        f"Allowed next nodes: {', '.join(sorted(allowed))}\n\n"
+        "Completed stage output:\n"
+        f"{output[:8000]}"
+    )
+    result = await asyncio.wait_for(
+        route_agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            config={"recursion_limit": 4},
+        ),
+        timeout=DEFAULT_ROUTE_TIMEOUT,
+    )
+    if isinstance(result, dict):
+        decision = _route_value_from_structured_response(
+            result.get("structured_response"),
+            allowed,
+        )
+        if decision:
+            return decision
+    return _route_value_from_structured_response(result, allowed)
+
+
+def _make_route_agent(model: Any, name: str) -> Any:
+    """Create a same-model structured router agent for workflow branching."""
+    return create_agent(
+        model,
+        [],
+        system_prompt=ROUTE_ROUTER_PROMPT,
+        response_format=RouteDecision,
+        name=name,
+    )
+
+
 def _make_subagent_node(
     name: str,
     spec: dict[str, Any],
@@ -206,7 +323,10 @@ def _make_subagent_node(
     return node
 
 
-def _validate_router(state: AuditState) -> Command[Literal["gapfill", "dedupe"]]:
+def _validate_router_from_decision(
+    state: AuditState,
+    decision: str,
+) -> Command[Literal["gapfill", "dedupe"]]:
     """After validate: if candidates remain unresolved, branch to gapfill.
 
     This is the validate⇄gapfill side-branch. ``gapfill_count`` bounds the
@@ -219,7 +339,7 @@ def _validate_router(state: AuditState) -> Command[Literal["gapfill", "dedupe"]]
     ))
     count = state.get("gapfill_count", 0)
 
-    if has_gaps and count < DEFAULT_MAX_GAPFILL:
+    if (decision == "gapfill" or (not decision and has_gaps)) and count < DEFAULT_MAX_GAPFILL:
         next_count = count + 1
         _write_audit_event({
             "type": "audit_route",
@@ -237,7 +357,27 @@ def _validate_router(state: AuditState) -> Command[Literal["gapfill", "dedupe"]]
     return Command(goto="dedupe")
 
 
-def _gapfill_router(state: AuditState) -> Command[Literal["hunt", "validate"]]:
+async def _validate_router(
+    state: AuditState,
+    route_agent: Any,
+) -> Command[Literal["gapfill", "dedupe"]]:
+    output = (state.get("stage_outputs") or {}).get("validate", "")
+    try:
+        decision = await _route_next_structured(
+            route_agent,
+            stage="validate",
+            output=output,
+            allowed={"gapfill", "dedupe"},
+        )
+    except Exception:
+        decision = _route_next(output, {"gapfill", "dedupe"})
+    return _validate_router_from_decision(state, decision)
+
+
+def _gapfill_router_from_decision(
+    state: AuditState,
+    decision: str,
+) -> Command[Literal["hunt", "validate"]]:
     """Gapfill decides where its requests go: re-hunt or re-validate.
 
     Per the harness design, gapfill emits targeted work for either Hunt
@@ -248,7 +388,7 @@ def _gapfill_router(state: AuditState) -> Command[Literal["hunt", "validate"]]:
     wants_hunt = any(k in lower for k in (
         "hunt", "search", "new candidate", "additional sink", "unexplored", "scan",
     ))
-    target = "hunt" if wants_hunt else "validate"
+    target = decision or ("hunt" if wants_hunt else "validate")
     _write_audit_event({
         "type": "audit_route",
         "from": "gapfill",
@@ -257,7 +397,27 @@ def _gapfill_router(state: AuditState) -> Command[Literal["hunt", "validate"]]:
     return Command(goto=target)
 
 
-def _feedback_router(state: AuditState) -> Command[Literal["hunt", "report"]]:
+async def _gapfill_router(
+    state: AuditState,
+    route_agent: Any,
+) -> Command[Literal["hunt", "validate"]]:
+    output = (state.get("stage_outputs") or {}).get("gapfill", "")
+    try:
+        decision = await _route_next_structured(
+            route_agent,
+            stage="gapfill",
+            output=output,
+            allowed={"hunt", "validate"},
+        )
+    except Exception:
+        decision = _route_next(output, {"hunt", "validate"})
+    return _gapfill_router_from_decision(state, decision)
+
+
+def _feedback_router_from_decision(
+    state: AuditState,
+    decision: str,
+) -> Command[Literal["hunt", "report"]]:
     """After feedback: weak findings trigger a fresh hunt round (the long loop).
 
     Routes back to Hunt (not Gapfill), resetting the gapfill budget so the
@@ -271,7 +431,7 @@ def _feedback_router(state: AuditState) -> Command[Literal["hunt", "report"]]:
     ))
     count = state.get("feedback_count", 0)
 
-    if is_weak and count < DEFAULT_MAX_FEEDBACK:
+    if (decision == "hunt" or (not decision and is_weak)) and count < DEFAULT_MAX_FEEDBACK:
         next_count = count + 1
         _write_audit_event({
             "type": "audit_route",
@@ -292,6 +452,23 @@ def _feedback_router(state: AuditState) -> Command[Literal["hunt", "report"]]:
     return Command(goto="report")
 
 
+async def _feedback_router(
+    state: AuditState,
+    route_agent: Any,
+) -> Command[Literal["hunt", "report"]]:
+    output = (state.get("stage_outputs") or {}).get("feedback", "")
+    try:
+        decision = await _route_next_structured(
+            route_agent,
+            stage="feedback",
+            output=output,
+            allowed={"hunt", "report"},
+        )
+    except Exception:
+        decision = _route_next(output, {"hunt", "report"})
+    return _feedback_router_from_decision(state, decision)
+
+
 def build_audit_graph(
     model: Any,
     tools: list[Any],
@@ -300,6 +477,8 @@ def build_audit_graph(
     subagent_models: dict[str, Any] | None = None,
     subagent_mcp_allow: dict[str, list[str] | None] | None = None,
     subagent_skills: dict[str, ResolvedSkill | None] | None = None,
+    structured_routing: bool = True,
+    compile_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     """Build and compile the audit pipeline StateGraph.
 
@@ -318,6 +497,21 @@ def build_audit_graph(
     spec_map = {s["name"]: s for s in specs}
 
     builder = StateGraph(AuditState)
+    validate_route_agent = (
+        _make_route_agent(model, "audit_validate_router")
+        if structured_routing
+        else None
+    )
+    gapfill_route_agent = (
+        _make_route_agent(model, "audit_gapfill_router")
+        if structured_routing
+        else None
+    )
+    feedback_route_agent = (
+        _make_route_agent(model, "audit_feedback_router")
+        if structured_routing
+        else None
+    )
 
     for name in AUDIT_SUBAGENT_ORDER:
         spec = spec_map[name]
@@ -332,9 +526,42 @@ def build_audit_graph(
         )
         builder.add_node(name, node_fn)
 
-    builder.add_node("validate_check", _validate_router)
-    builder.add_node("gapfill_check", _gapfill_router)
-    builder.add_node("feedback_check", _feedback_router)
+    async def validate_check(
+        state: AuditState,
+    ) -> Command[Literal["gapfill", "dedupe"]]:
+        if validate_route_agent is None:
+            output = (state.get("stage_outputs") or {}).get("validate", "")
+            return _validate_router_from_decision(
+                state,
+                _route_next(output, {"gapfill", "dedupe"}),
+            )
+        return await _validate_router(state, validate_route_agent)
+
+    async def gapfill_check(
+        state: AuditState,
+    ) -> Command[Literal["hunt", "validate"]]:
+        if gapfill_route_agent is None:
+            output = (state.get("stage_outputs") or {}).get("gapfill", "")
+            return _gapfill_router_from_decision(
+                state,
+                _route_next(output, {"hunt", "validate"}),
+            )
+        return await _gapfill_router(state, gapfill_route_agent)
+
+    async def feedback_check(
+        state: AuditState,
+    ) -> Command[Literal["hunt", "report"]]:
+        if feedback_route_agent is None:
+            output = (state.get("stage_outputs") or {}).get("feedback", "")
+            return _feedback_router_from_decision(
+                state,
+                _route_next(output, {"hunt", "report"}),
+            )
+        return await _feedback_router(state, feedback_route_agent)
+
+    builder.add_node("validate_check", validate_check)
+    builder.add_node("gapfill_check", gapfill_check)
+    builder.add_node("feedback_check", feedback_check)
 
     # Main line: recon → hunt → validate → (validate_check) → dedupe → trace
     #            → feedback → (feedback_check) → report
@@ -354,4 +581,4 @@ def build_audit_graph(
     # feedback_check routes to hunt (long loop) or report (forward)
     builder.add_edge("report", END)
 
-    return builder.compile()
+    return builder.compile(**(compile_kwargs or {}))

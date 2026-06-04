@@ -61,6 +61,8 @@ CREATE INDEX IF NOT EXISTS idx_tools_conv ON tool_executions(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_memory_conv ON memory_artifacts(conversation_id);
 """
 
+SCHEMA_VERSION = 1
+
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
@@ -83,7 +85,31 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.executescript(_SCHEMA_SQL)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Create or upgrade the local SQLite schema."""
+        current = int(
+            self._conn.execute("PRAGMA user_version").fetchone()[0]
+        )
+        if current == 0:
+            self._conn.executescript(_SCHEMA_SQL)
+            self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            self._conn.commit()
+            return
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Unsupported database schema version {current}; "
+                f"this Sarma build supports up to {SCHEMA_VERSION}."
+            )
+        if current < SCHEMA_VERSION:
+            self._upgrade_schema(current)
+
+    def _upgrade_schema(self, current: int) -> None:
+        """Apply forward migrations from ``current`` to SCHEMA_VERSION."""
+        # Version 1 is the baseline schema currently created above.
+        self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        self._conn.commit()
 
     def create_conversation(self, title: str = "", model_name: str = "") -> str:
         cid = _uid()

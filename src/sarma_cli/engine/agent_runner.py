@@ -95,7 +95,10 @@ class AgentRunner:
                 stream_mode=["messages", "updates", "custom"],
                 subgraphs=True,
                 version="v2",
-                config={"recursion_limit": self.run_config.max_steps},
+                config={
+                    "recursion_limit": self.run_config.max_steps,
+                    "configurable": {"thread_id": self._conversation_id},
+                },
             ):
                 self._accumulate_reasoning(chunk)
 

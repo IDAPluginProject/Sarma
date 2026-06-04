@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,6 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.worker import get_current_worker
 
-from sarma_cli.commands import COMMANDS
 from sarma_cli.config import CliConfig, save_agents, save_mcp, save_models
 from sarma_cli.engine.enums import StreamEventType
 from sarma_cli.engine.models import StreamEvent
@@ -25,6 +26,7 @@ from sarma_cli.store import Store
 from sarma_cli.tui.chat_area import ChatArea
 from sarma_cli.tui.config_app import ConfigScreen
 from sarma_cli.tui.input_bar import InputBar, UserInputSubmitted
+from sarma_cli.tui.main_commands import MainCommandController
 from sarma_cli.tui.plugin_app import PluginScreen
 from sarma_cli.tui.sidebar import Sidebar
 from sarma_cli.workflows import get_registry, init_workflows
@@ -43,7 +45,8 @@ class MainApp(App[None]):
 
     CSS_PATH = Path(__file__).with_suffix(".css")
     BINDINGS = [
-        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+c", "interrupt", "Stop"),
+        ("escape", "interrupt", "Stop"),
         ("ctrl+l", "clear", "Clear"),
     ]
 
@@ -61,6 +64,31 @@ class MainApp(App[None]):
         self._failed_agent = ""
         self._delegate_call_agents: dict[str, str] = {}
         self._last_parallel_status = ""
+        self._turn_worker: Any | None = None
+        self._turn_cancelled = False
+        self._last_interrupt_at = 0.0
+        self._commands = MainCommandController(self)
+
+    def query_one_chat(self) -> ChatArea:
+        return self.query_one(ChatArea)
+
+    def query_one_sidebar(self) -> Sidebar:
+        return self.query_one(Sidebar)
+
+    def notify_status(
+        self,
+        message: str,
+        *,
+        severity: str = "information",
+    ) -> None:
+        """Show transient UI status without adding it to chat history."""
+        try:
+            self.notify(message, severity=severity, timeout=4)
+        except Exception:
+            self.query_one(ChatArea).add_system_message(message)
+
+    def refresh_resolver(self) -> None:
+        self.resolver = RuntimePolicyResolver(self.config)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-container"):
@@ -128,18 +156,21 @@ class MainApp(App[None]):
         registry = get_registry()
         workflow = registry.current_name() or "ruflo"
         if not self.resolver or not self.resolver.provider_for(workflow).model_name:
-            chat.add_system_message("No model configured — run /config to set one up.")
+            self.notify_status(
+                "No model configured. Run /config to set one up.",
+                severity="warning",
+            )
             return
 
         if self._running_turn:
-            chat.add_system_message("A turn is already in progress. Please wait.")
+            self.notify_status("A turn is already in progress.", severity="warning")
             return
 
         self._running_turn = True
         self._turn_failed = False
         self._reset_runtime_graph()
 
-        self.run_worker(
+        self._turn_worker = self.run_worker(
             self._run_turn_worker(content),
             thread=False,
         )
@@ -149,11 +180,15 @@ class MainApp(App[None]):
         if self.session is None:
             return
 
+        cancelled = False
         try:
             async for event in self.session.run_turn(message):
                 if get_current_worker().is_cancelled:
+                    cancelled = True
                     break
                 self.post_message(StreamEventMessage(event))
+        except asyncio.CancelledError:
+            cancelled = True
         except Exception as exc:
             self.post_message(
                 StreamEventMessage(
@@ -164,10 +199,21 @@ class MainApp(App[None]):
                 )
             )
         finally:
-            self.post_message(StreamEventMessage(
-                StreamEvent(type=StreamEventType.RUN_COMPLETED)
-            ))
+            if cancelled or get_current_worker().is_cancelled:
+                self.post_message(
+                    StreamEventMessage(
+                        StreamEvent(
+                            type=StreamEventType.RUN_FAILED,
+                            payload={"error": "Run cancelled."},
+                        )
+                    )
+                )
+            else:
+                self.post_message(StreamEventMessage(
+                    StreamEvent(type=StreamEventType.RUN_COMPLETED)
+                ))
             self._running_turn = False
+            self._turn_worker = None
 
     async def on_stream_event_message(self, event_msg: StreamEventMessage) -> None:
         """Handle stream events from the background worker."""
@@ -295,88 +341,28 @@ class MainApp(App[None]):
 
     async def _handle_slash_command(self, cmd: str) -> None:
         """Handle slash commands in the TUI."""
-        chat = self.query_one(ChatArea)
+        await self._commands.handle(cmd)
 
-        # Special commands handled by TUI directly
-        cmd_lower = cmd.strip().lower()
+    def handle_workflow_command(self, cmd: str) -> None:
+        self._handle_workflow_command(cmd)
 
-        if cmd_lower in ("/exit", "/quit", "/q"):
-            self.exit()
-            return
+    async def handle_status_command(self) -> None:
+        await self._handle_status_command()
 
-        if cmd_lower == "/clear":
-            chat.clear_chat()
-            if self.session:
-                self.session.new_conversation()
-            return
+    def handle_graph_command(self) -> None:
+        self._handle_graph_command()
 
-        if cmd_lower == "/help":
-            help_text = "Commands:\n"
-            for c, desc in COMMANDS.items():
-                help_text += f"  {c:<12} {desc}\n"
-            chat.add_system_message(help_text)
-            return
+    def handle_models_command(self) -> None:
+        self._handle_models_command()
 
-        if cmd_lower.startswith("/workflow"):
-            self._handle_workflow_command(cmd)
-            return
+    def handle_history_command(self) -> None:
+        self._handle_history_command()
 
-        if cmd_lower == "/status":
-            await self._handle_status_command()
-            return
+    async def handle_config_command(self) -> None:
+        await self._handle_config_command()
 
-        if cmd_lower == "/graph":
-            self._handle_graph_command()
-            return
-
-        if cmd_lower == "/models":
-            self._handle_models_command()
-            return
-
-        if cmd_lower == "/history":
-            self._handle_history_command()
-            return
-
-        if cmd_lower == "/config":
-            await self._handle_config_command()
-            return
-
-        if cmd_lower == "/plugin":
-            await self._handle_plugin_command()
-            return
-
-        if cmd_lower == "/restart":
-            if self.session:
-                await self.session.restart_runtime()
-                self.resolver = RuntimePolicyResolver(self.config)
-            chat.add_system_message("Workflow runtime restarted.")
-            return
-
-        if cmd_lower == "/compact":
-            if self.session:
-                try:
-                    compacted = await self.session.compact_context(
-                        force=True,
-                        workflow=get_registry().current_name() or "ruflo",
-                    )
-                except Exception as exc:
-                    chat.add_system_message(f"Context compaction failed: {exc}")
-                else:
-                    msg = "Context compacted." if compacted else "Context is already within model budget."
-                    chat.add_system_message(msg)
-            return
-
-        if cmd_lower.startswith("/resume"):
-            _, _, cid = cmd.partition(" ")
-            cid = cid.strip()
-            if self.session and cid and self.session.resume_conversation(cid):
-                chat.add_system_message(f"Resumed conversation {cid}")
-                self.query_one(Sidebar).update_session(cid)
-            else:
-                chat.add_system_message(f"Conversation {cid or '(missing)'} not found.")
-            return
-
-        chat.add_system_message(f"Unknown command: {cmd}")
+    async def handle_plugin_command(self) -> None:
+        await self._handle_plugin_command()
 
     def _handle_workflow_command(self, cmd: str) -> None:
         chat = self.query_one(ChatArea)
@@ -420,7 +406,7 @@ class MainApp(App[None]):
             and not self.session.pool.is_connected
             and self._configured_mcp_statuses(workflow)
         ):
-            chat.add_system_message("Checking MCP status in background...")
+            self.notify_status("Checking MCP status in background...")
             self.run_worker(
                 self._refresh_status_worker(workflow),
                 thread=False,
@@ -510,7 +496,7 @@ class MainApp(App[None]):
     async def _apply_config_result(self, result: Any) -> None:
         chat = self.query_one(ChatArea)
         if result is None:
-            chat.add_system_message("Config closed without saving.")
+            self.notify_status("Config closed without saving.")
             self.query_one(InputBar).focus_input()
             return
         self.config.models = result.models
@@ -529,9 +515,7 @@ class MainApp(App[None]):
         workflow = get_registry().current_name() or "ruflo"
         sidebar = self.query_one(Sidebar)
         self._sync_model_sidebar(sidebar, workflow)
-        chat.add_system_message(
-            f"Config saved to {models_path} and {agents_path}."
-        )
+        self.notify_status(f"Config saved to {models_path} and {agents_path}.")
         self.query_one(InputBar).focus_input()
 
     async def _handle_plugin_command(self) -> None:
@@ -543,7 +527,7 @@ class MainApp(App[None]):
     async def _apply_plugin_result(self, result: Any) -> None:
         chat = self.query_one(ChatArea)
         if result is None:
-            chat.add_system_message("Plugin manager closed without saving.")
+            self.notify_status("Plugin manager closed without saving.")
             self.query_one(InputBar).focus_input()
             return
         self.config.mcp_servers = result.mcp_servers
@@ -562,7 +546,7 @@ class MainApp(App[None]):
                 self.session.pool.is_connected,
                 servers=self._mcp_statuses(workflow),
             )
-        chat.add_system_message(f"Plugin config saved to {mcp_path}.")
+        self.notify_status(f"Plugin config saved to {mcp_path}.")
         self.query_one(InputBar).focus_input()
 
     def action_clear(self) -> None:
@@ -571,6 +555,21 @@ class MainApp(App[None]):
         chat.clear_chat()
         if self.session:
             self.session.new_conversation()
+
+    def action_interrupt(self) -> None:
+        """Stop the current turn, or double-press to quit when idle."""
+        now = time.monotonic()
+        if self._running_turn and self._turn_worker is not None:
+            self._turn_cancelled = True
+            self._turn_worker.cancel()
+            self.notify_status("Stopping current workflow...")
+            self._last_interrupt_at = now
+            return
+        if now - self._last_interrupt_at <= 1.2:
+            self.exit()
+            return
+        self._last_interrupt_at = now
+        self.notify_status("Press Ctrl+C again quickly to exit.")
 
     async def on_unmount(self) -> None:
         """Cleanup session on exit."""

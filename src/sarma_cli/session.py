@@ -13,6 +13,7 @@ from sarma_cli.engine.agent_factory import AgentFactory
 from sarma_cli.engine.agent_runner import AgentRunner
 from sarma_cli.engine.mcp_pool import McpClientPool
 from sarma_cli.engine.models import ConversationMessage, StreamEvent
+from sarma_cli.engine.model_factory import ModelFactory
 from sarma_cli.engine.enums import StreamEventType
 from sarma_cli.context.compaction import (
     STRUCTURED_MEMORY_PROMPT,
@@ -23,6 +24,7 @@ from sarma_cli.context.compaction import (
 
 from sarma_cli.config import CliConfig
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
+from sarma_cli.runtime.services import AgentRuntimeServices
 from sarma_cli.store import Store
 
 
@@ -38,7 +40,13 @@ class Session:
         self._config = config
         self._store = store
         self._pool = McpClientPool()
-        self._factory = AgentFactory(self._pool)
+        self._model_factory = ModelFactory()
+        self._runtime_services = AgentRuntimeServices.create()
+        self._factory = AgentFactory(
+            self._pool,
+            model_factory=self._model_factory,
+            runtime_services=self._runtime_services,
+        )
         self._resolver = RuntimePolicyResolver(config)
         self._conversation_id: str = ""
         self._history: list[ConversationMessage] = []
@@ -81,7 +89,13 @@ class Session:
         """Rebuild runtime resources while preserving conversation history."""
         await self._pool.disconnect()
         self._pool = McpClientPool()
-        self._factory = AgentFactory(self._pool)
+        self._model_factory = ModelFactory()
+        self._runtime_services = AgentRuntimeServices.create()
+        self._factory = AgentFactory(
+            self._pool,
+            model_factory=self._model_factory,
+            runtime_services=self._runtime_services,
+        )
         self._resolver = RuntimePolicyResolver(self._config)
         self._reset_graph_state()
 
@@ -297,7 +311,7 @@ class Session:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         provider = self._resolver.provider_for(workflow)
-        model = self._factory._init_model(provider, None)
+        model = self._model_factory.init_model(provider, None)
         transcript = "\n\n".join(
             f"{message.role.upper()}: {message.content}"
             for message in messages

@@ -19,6 +19,10 @@ class AuditWorkflow(Workflow):
         self._stages = list(AUDIT_SUBAGENT_ORDER)
         self._descriptions = {s["name"]: s["description"] for s in AUDIT_SUBAGENTS}
 
+    @property
+    def subagents(self) -> tuple[str, ...]:
+        return tuple(self._stages)
+
     def render_graph(self, **kwargs: Any) -> Panel:
         """Render the audit harness — main line plus loop annotations.
 
@@ -74,3 +78,55 @@ class AuditWorkflow(Workflow):
                 text.append(f"           ↺ ×{feedback_loops} weak → back to Hunt\n", style="#d29922")
 
         return Panel(text, title="[bold bright_blue]Audit Harness[/]", border_style="#58a6ff", expand=False)
+
+    def render_sidebar_graph(self, **kwargs: Any) -> Text:
+        current_agents = list(kwargs.get("active", []) or [])
+        completed = set(kwargs.get("completed", set()) or set())
+        failed = str(kwargs.get("failed") or "")
+        gapfill_loops = int(kwargs.get("gapfill_loops") or 0)
+        feedback_loops = int(kwargs.get("feedback_loops") or 0)
+
+        text = Text()
+        main_line = ["recon", "hunt", "validate", "dedupe", "trace", "feedback", "report"]
+        for index, stage in enumerate(main_line):
+            _append_sidebar_stage(text, stage, current_agents, completed, failed)
+            if index != len(main_line) - 1:
+                text.append(" → ", style="dim")
+                if index in {2, 5}:
+                    text.append("\n", style="dim")
+
+            if stage == "validate":
+                text.append("\n  ")
+                text.append("└ ", style="dim")
+                _append_sidebar_stage(text, "gapfill", current_agents, completed, failed)
+                text.append(" ⇢ hunt/validate", style="dim")
+                if gapfill_loops:
+                    text.append(f" ×{gapfill_loops}", style="#d29922")
+                text.append("\n", style="dim")
+
+            if stage == "feedback" and feedback_loops:
+                text.append("  ↺ hunt", style="#d29922")
+                text.append(f" ×{feedback_loops}", style="#d29922")
+
+        if current_agents:
+            text.append("\nactive  ", style="dim")
+            text.append(", ".join(current_agents), style="bold #58a6ff")
+        return text
+
+
+def _append_sidebar_stage(
+    text: Text,
+    stage: str,
+    active: list[str],
+    completed: set[str],
+    failed: str,
+) -> None:
+    if stage == failed:
+        icon, style = "✗", "bold #f85149"
+    elif stage in active:
+        icon, style = "▶", "bold #58a6ff"
+    elif stage in completed:
+        icon, style = "✓", "#3fb950"
+    else:
+        icon, style = "○", "dim"
+    text.append(f"{icon} {stage}", style=style)

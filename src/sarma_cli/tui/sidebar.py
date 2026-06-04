@@ -8,6 +8,8 @@ from rich.text import Text
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from sarma_cli.workflows import get_registry
+
 
 class Sidebar(Vertical):
     """Right sidebar with workflow status, model info, and runtime state."""
@@ -192,114 +194,20 @@ class Sidebar(Vertical):
             return
 
     def _render_workflow_graph(self) -> Text:
-        if self._workflow_name == "ruflo":
-            return self._render_ruflo_graph()
-        if self._workflow_name == "audit-slim":
-            return self._render_audit_slim_graph()
-        if self._workflow_name == "audit":
-            return self._render_audit_graph()
-        text = Text()
-        text.append(self._workflow_name or "unknown", style="bold #e6edf3")
-        text.append("\n○ idle", style="dim")
-        return text
-
-    def _render_ruflo_graph(self) -> Text:
-        text = Text()
-        text.append("primary", style="bold #a371f7")
-        text.append("  ● ready\n", style="#3fb950")
-        text.append(f"agents run  {len(self._seen_agents)}\n", style="#7d8590")
-        if self._current_agents:
-            text.append("parallel\n" if len(self._current_agents) > 1 else "active\n", style="dim")
-            for agent in self._current_agents:
-                text.append(f"  ▶ {agent}\n", style="bold #58a6ff")
-        elif self._seen_agents:
-            text.append("active  idle\n", style="dim")
-        else:
-            text.append("active  none\n", style="dim")
-        completed = [agent for agent in self._seen_agents if agent in self._completed_agents]
-        if completed:
-            text.append("done\n", style="dim")
-            for agent in completed[-4:]:
-                text.append(f"  ✓ {agent}\n", style="#3fb950")
-        return text
-
-    def _render_stage_graph(self, stages: list[str]) -> Text:
-        text = Text()
-        for index, stage in enumerate(stages):
-            if stage == self._failed_agent:
-                icon, style = "✗", "bold #f85149"
-            elif stage in self._current_agents:
-                icon, style = "▶", "bold #58a6ff"
-            elif stage in self._completed_agents:
-                icon, style = "✓", "#3fb950"
-            else:
-                icon, style = "○", "dim"
-            text.append(f"{icon} {stage}", style=style)
-            if index != len(stages) - 1:
-                connector = " ↔ " if stage in {"validate", "gapfill"} else " → "
-                text.append(connector, style="dim")
-                if (index + 1) % 3 == 0:
-                    text.append("\n", style="dim")
-        if self._current_agents:
-            text.append("\nactive  ", style="dim")
-            text.append(", ".join(self._current_agents), style="bold #58a6ff")
-        return text
-
-    def _render_audit_slim_graph(self) -> Text:
-        text = Text()
-        self._append_stage(text, "recon")
-        text.append(" → ", style="dim")
-        self._append_stage(text, "hunter")
-        text.append(" ↔ ", style="dim")
-        self._append_stage(text, "verify")
-        text.append(" → ", style="dim")
-        self._append_stage(text, "report")
-        if self._feedback_loops:
-            text.append(f"\nfeedback  verify → hunter ×{self._feedback_loops}", style="#d29922")
-        if self._current_agents:
-            text.append("\nactive  ", style="dim")
-            text.append(", ".join(self._current_agents), style="bold #58a6ff")
-        return text
-
-    def _render_audit_graph(self) -> Text:
-        text = Text()
-        main_line = ["recon", "hunt", "validate", "dedupe", "trace", "feedback", "report"]
-        for index, stage in enumerate(main_line):
-            self._append_stage(text, stage)
-            if index != len(main_line) - 1:
-                text.append(" → ", style="dim")
-                if index in {2, 5}:
-                    text.append("\n", style="dim")
-
-            if stage == "validate":
-                text.append("\n  ")
-                text.append("└ ", style="dim")
-                self._append_stage(text, "gapfill")
-                text.append(" ⇢ hunt/validate", style="dim")
-                if self._gapfill_loops:
-                    text.append(f" ×{self._gapfill_loops}", style="#d29922")
-                text.append("\n", style="dim")
-
-            if stage == "feedback" and self._feedback_loops:
-                text.append("  ↺ hunt", style="#d29922")
-                text.append(f" ×{self._feedback_loops}", style="#d29922")
-
-        if self._current_agents:
-            text.append("\nactive  ", style="dim")
-            text.append(", ".join(self._current_agents), style="bold #58a6ff")
-        return text
-
-    def _append_stage(self, text: Text, stage: str) -> None:
-        if stage == self._failed_agent:
-            icon, style = "✗", "bold #f85149"
-        elif stage in self._current_agents:
-            icon, style = "▶", "bold #58a6ff"
-        elif stage in self._completed_agents:
-            icon, style = "✓", "#3fb950"
-        else:
-            icon, style = "○", "dim"
-        text.append(f"{icon} {stage}", style=style)
-
+        workflow = get_registry().get(self._workflow_name)
+        if workflow is None:
+            text = Text()
+            text.append(self._workflow_name or "unknown", style="bold #e6edf3")
+            text.append("\n○ idle", style="dim")
+            return text
+        return workflow.render_sidebar_graph(
+            active=self._current_agents,
+            seen=self._seen_agents,
+            completed=self._completed_agents,
+            failed=self._failed_agent,
+            gapfill_loops=self._gapfill_loops,
+            feedback_loops=self._feedback_loops,
+        )
 
 def _status_value(status: Any, key: str, default: Any = None) -> Any:
     if isinstance(status, dict):

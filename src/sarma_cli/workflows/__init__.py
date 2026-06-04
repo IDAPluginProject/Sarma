@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from rich.panel import Panel
+from rich.text import Text
 
 
 class Workflow(ABC):
@@ -19,6 +20,18 @@ class Workflow(ABC):
     @abstractmethod
     def render_graph(self, **kwargs: Any) -> Panel:
         """Render the workflow's execution graph."""
+
+    @property
+    def subagents(self) -> tuple[str, ...]:
+        """Return subagent names owned by this workflow."""
+        return ()
+
+    def render_sidebar_graph(self, **kwargs: Any) -> Text:
+        """Render compact runtime state for the right sidebar."""
+        text = Text()
+        text.append(self.name or "unknown", style="bold #e6edf3")
+        text.append("\n○ idle", style="dim")
+        return text
 
 
 class WorkflowRegistry:
@@ -43,6 +56,9 @@ class WorkflowRegistry:
 
     def current(self) -> Workflow | None:
         return self._workflows.get(self._current) if self._current else None
+
+    def get(self, name: str) -> Workflow | None:
+        return self._workflows.get(name)
 
     def current_name(self) -> str:
         return self._current or "unknown"
