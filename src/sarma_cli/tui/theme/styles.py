@@ -243,3 +243,23 @@ PLUGIN_APP_CSS = BASE_CSS + _pane_css(
     color: #e6edf3;
 }
 """
+
+
+RAG_APP_CSS = BASE_CSS + _pane_css(
+    sections_width=18,
+    detail_selector="#detail",
+) + """
+#fields {
+    height: 1fr;
+    overflow-y: auto;
+    padding-right: 1;
+    scrollbar-background: #0d1117;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #58a6ff;
+}
+
+#description {
+    color: #7d8590;
+    margin-bottom: 1;
+}
+"""

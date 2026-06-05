@@ -13,7 +13,12 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Select, Static
 
-from sarma_cli.config import CliConfig, McpServerConfig
+from sarma_cli.config import (
+    CliConfig,
+    McpServerConfig,
+    load_global_mcp_servers,
+    load_local_mcp_servers,
+)
 from sarma_cli.engine.dto import McpServerDTO
 from sarma_cli.engine.mcp_pool import McpClientPool
 from sarma_cli.resources.plugins import (
@@ -39,6 +44,8 @@ MCP_REMOTE_FIELDS = ("mcp-url", "mcp-headers")
 @dataclass(slots=True)
 class PluginEditResult:
     mcp_servers: list[McpServerConfig]
+    local_mcp_servers: list[McpServerConfig]
+    global_mcp_servers: list[McpServerConfig]
     changed: bool = False
     restart_requested: bool = False
 
@@ -55,7 +62,14 @@ class PluginViewMixin:
 
     def __init__(self, config: CliConfig) -> None:
         super().__init__()
-        self.mcp_servers = deepcopy(config.mcp_servers)
+        self.global_mcp_servers = load_global_mcp_servers()
+        self.local_mcp_servers = load_local_mcp_servers()
+        if not self.global_mcp_servers and not self.local_mcp_servers and config.mcp_servers:
+            self.local_mcp_servers = deepcopy(config.mcp_servers)
+        self.mcp_servers = _merge_mcp_servers(
+            self.global_mcp_servers,
+            self.local_mcp_servers,
+        )
         self.section = SECTION_MCP
         self.selected = 0
         self.changed = False
@@ -90,6 +104,20 @@ class PluginViewMixin:
                         value="stdio",
                         allow_blank=False,
                         id="mcp-transport",
+                    )
+                    yield Label("Enabled", id="label-mcp-enabled", classes="field-label")
+                    yield Select(
+                        [("true", "true"), ("false", "false")],
+                        value="true",
+                        allow_blank=False,
+                        id="mcp-enabled",
+                    )
+                    yield Label("MCP scope", id="label-mcp-scope", classes="field-label")
+                    yield Select(
+                        [("workspace", "workspace"), ("global", "global")],
+                        value="workspace",
+                        allow_blank=False,
+                        id="mcp-scope",
                     )
                     yield Label("URL (http/sse)", id="label-mcp-url", classes="field-label")
                     yield Input(id="mcp-url", placeholder="http://127.0.0.1:8000/mcp")
@@ -170,6 +198,8 @@ class PluginViewMixin:
     def action_save(self) -> None:
         self._finish(PluginEditResult(
             mcp_servers=deepcopy(self.mcp_servers),
+            local_mcp_servers=deepcopy(self.local_mcp_servers),
+            global_mcp_servers=deepcopy(self.global_mcp_servers),
             changed=self.changed,
             restart_requested=self.restart_requested or self.changed,
         ))
@@ -186,10 +216,20 @@ class PluginViewMixin:
         except Exception as exc:
             self._set_status(str(exc))
             return
-        upsert_mcp_server(self.mcp_servers, server)
+        scope = self._input("mcp-scope")
+        if scope == "global":
+            upsert_mcp_server(self.global_mcp_servers, server)
+        else:
+            upsert_mcp_server(self.local_mcp_servers, server)
+        self.mcp_servers = _merge_mcp_servers(
+            self.global_mcp_servers,
+            self.local_mcp_servers,
+        )
         self.changed = True
         self.restart_requested = True
-        self._set_status(f"MCP {server.name} applied. Press Save to write config.")
+        self._set_status(
+            f"MCP {server.name} applied to {scope}. Press Save to write config."
+        )
         await self._refresh_items()
 
     async def _check_mcp(self) -> None:
@@ -340,7 +380,10 @@ class PluginViewMixin:
     def _item_labels(self) -> list[str]:
         if self.section == SECTION_MCP:
             names = sorted({server.name for server in self.mcp_servers})
-            return [f"{name} [configured]" for name in names] or ["No MCP configured"]
+            return [
+                f"{name} [{self._mcp_scope_for(name)}, {self._mcp_enabled_for(name)}]"
+                for name in names
+            ] or ["No MCP configured"]
         installed = list_available_skills()
         return [f"{name} [installed]" for name in installed] or ["No skills installed"]
 
@@ -366,11 +409,18 @@ class PluginViewMixin:
             args=self._input("mcp-args") if transport == "stdio" else "",
             env=self._input("mcp-env") if transport == "stdio" else "",
             headers=self._input("mcp-headers") if transport in {"http", "sse"} else "",
+            enabled=self._input("mcp-enabled") != "false",
         )
 
     def _fill_mcp_fields(self, server: McpServerConfig | None, mode: str) -> None:
         self.query_one("#mcp-name", Input).value = server.name if server else ""
         self.query_one("#mcp-transport", Select).value = mode
+        self.query_one("#mcp-enabled", Select).value = (
+            "true" if server is None or server.enabled else "false"
+        )
+        self.query_one("#mcp-scope", Select).value = (
+            self._mcp_scope_for(server.name) if server else "workspace"
+        )
         self.query_one("#mcp-url", Input).value = server.url if server else ""
         self.query_one("#mcp-command", Input).value = server.command if server else ""
         self.query_one("#mcp-args", Input).value = server.args if server else ""
@@ -382,6 +432,10 @@ class PluginViewMixin:
             self._show_input_field(widget_id, show)
         self.query_one("#mcp-transport", Select).display = show
         self.query_one("#label-mcp-transport", Label).display = show
+        self.query_one("#mcp-enabled", Select).display = show
+        self.query_one("#label-mcp-enabled", Label).display = show
+        self.query_one("#mcp-scope", Select).display = show
+        self.query_one("#label-mcp-scope", Label).display = show
         if show:
             self._show_mcp_transport_fields(self._input("mcp-transport"))
         else:
@@ -413,9 +467,22 @@ class PluginViewMixin:
         self.query_one("#skill-results", Vertical).display = show
 
     def _input(self, widget_id: str) -> str:
-        if widget_id in {"mcp-transport", "skill-scope"}:
+        if widget_id in {"mcp-transport", "mcp-enabled", "mcp-scope", "skill-scope"}:
             return str(self.query_one(f"#{widget_id}", Select).value).strip()
         return self.query_one(f"#{widget_id}", Input).value.strip()
+
+    def _mcp_scope_for(self, name: str) -> str:
+        if any(server.name == name for server in self.local_mcp_servers):
+            return "workspace"
+        if any(server.name == name for server in self.global_mcp_servers):
+            return "global"
+        return "workspace"
+
+    def _mcp_enabled_for(self, name: str) -> str:
+        for server in self.mcp_servers:
+            if server.name == name:
+                return "enabled" if server.enabled else "disabled"
+        return "disabled"
 
     def _set_status(self, text: str) -> None:
         self.status = text
@@ -434,6 +501,21 @@ def _valid_scope(value: str) -> str:
     if scope not in {"workspace", "global"}:
         raise ValueError("Skill scope must be workspace or global.")
     return scope
+
+
+def _merge_mcp_servers(
+    global_servers: list[McpServerConfig],
+    local_servers: list[McpServerConfig],
+) -> list[McpServerConfig]:
+    by_name: dict[str, McpServerConfig] = {}
+    order: list[str] = []
+    for server in [*global_servers, *local_servers]:
+        if not server.name:
+            continue
+        if server.name not in by_name:
+            order.append(server.name)
+        by_name[server.name] = server
+    return [deepcopy(by_name[name]) for name in order]
 
 
 def _is_url(value: str) -> bool:

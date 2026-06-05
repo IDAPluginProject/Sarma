@@ -8,6 +8,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from sarma_cli.config import RagConfig
+
 
 def _uid() -> str:
     return uuid.uuid4().hex[:12]
@@ -204,3 +206,4 @@ class AgentRunConfig:
     subagent_providers: dict[str, Any] = field(default_factory=dict)
     subagent_mcp_allow: dict[str, list[str] | None] = field(default_factory=dict)
     subagent_skills: dict[str, ResolvedSkill | None] = field(default_factory=dict)
+    rag: RagConfig = field(default_factory=RagConfig)

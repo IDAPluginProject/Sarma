@@ -213,6 +213,7 @@ class Session:
             subagent_providers=run_plan.subagent_providers,
             subagent_mcp_allow=run_plan.subagent_mcp_allow,
             subagent_skills=run_plan.subagent_skills,
+            rag=run_plan.rag,
         )
 
         async for event in runner.run(user_message):

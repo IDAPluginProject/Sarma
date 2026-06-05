@@ -19,6 +19,7 @@ _DIR_NAME = ".sarma"
 MODELS_NAME = "models.toml"
 AGENTS_NAME = "agents.toml"
 MCP_NAME = "mcp.toml"
+RAG_NAME = "rag.toml"
 INPUT_HISTORY_NAME = ".history"
 
 
@@ -65,6 +66,34 @@ def global_mcp_file() -> Path:
 
 def local_mcp_file() -> Path:
     return local_dir() / MCP_NAME
+
+
+def global_rag_file() -> Path:
+    return global_dir() / RAG_NAME
+
+
+def local_rag_file() -> Path:
+    return local_dir() / RAG_NAME
+
+
+def rag_dir() -> Path:
+    return local_dir() / "rag"
+
+
+def global_rag_dir() -> Path:
+    return global_dir() / "rag"
+
+
+def rag_docs_dir() -> Path:
+    return rag_dir() / "docs"
+
+
+def rag_chroma_dir() -> Path:
+    return rag_dir() / "chroma"
+
+
+def rag_models_dir() -> Path:
+    return global_rag_dir() / "models"
 
 
 def db_path() -> Path:

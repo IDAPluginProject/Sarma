@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from sarma_cli.config import CliConfig, McpServerConfig, ProviderConfig, WILDCARD
+from sarma_cli.config import CliConfig, McpServerConfig, ProviderConfig, RagConfig, WILDCARD
 from sarma_cli.engine.dto import McpServerDTO, ModelProviderDTO
 from sarma_cli.engine.models import ResolvedSkill, resolve_skill
 from sarma_cli.engine.prompts import build_system_prompt
@@ -32,6 +32,7 @@ class RunPlan:
     subagent_providers: dict[str, ModelProviderDTO]
     subagent_mcp_allow: dict[str, list[str] | None]
     subagent_skills: dict[str, ResolvedSkill | None]
+    rag: RagConfig
 
 
 class RuntimePolicyResolver:
@@ -87,6 +88,7 @@ class RuntimePolicyResolver:
                 for name in subagents
             },
             subagent_skills=subagent_skills,
+            rag=self._config.rag,
         )
 
     def _agent_for(self, workflow: str, subagent: str | None = None) -> Any:

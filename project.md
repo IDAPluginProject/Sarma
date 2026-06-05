@@ -11,7 +11,7 @@ interactive experience is a full-screen TUI with:
 - center chat area;
 - bottom input bar;
 - right runtime/workflow sidebar;
-- modal `/config` and `/plugin` screens.
+- modal `/config`, `/plugin`, and `/rag` screens.
 
 The engine is LangChain/LangGraph based. Sarma resolves model, MCP, skill, and
 workflow policy before entering the engine layer; the engine receives concrete
@@ -83,7 +83,11 @@ CLI / TUI
 - `config.py` / `paths.py`: layered global/workspace config and filesystem
   paths.
 - `store.py`: Sarma's durable SQLite store under `./.sarma/db.sqlite`.
-- `resources/`: skill discovery and plugin/MCP helper logic.
+- `resources/`: skill discovery, RAG chunking, web search, network exchange,
+  and plugin/MCP helper logic.
+- Built-in tools such as `rag_search`, `web_search`, `http_exchange`, and
+  `packet_exchange` are added to existing agents in `AgentFactory`; they are
+  not modeled as standalone workflow agents.
 - `runtime/`: converts config/resources into concrete runtime policy and
   session-scoped LangGraph services.
 - `engine/`: LangChain/LangGraph execution, model construction, MCP pooling,
@@ -325,7 +329,17 @@ be copied.
 
 Sarma persistence is explicit:
 
-- `models.toml`, `agents.toml`, `mcp.toml`: workspace runtime config.
+- `~/.sarma/models.toml` and `~/.sarma/agents.toml`: global model and workflow
+  policy config.
+- `mcp.toml`: additive global/workspace MCP definitions. Workspace definitions
+  override only same-name global entries.
+- `rag.toml`: global RAG embedding model settings plus additive
+  global/workspace knowledge base registrations.
+- `rag/docs/`: default workspace source document directories for RAG knowledge
+  bases; individual KBs can override this path in `rag.toml`.
+- `rag/chroma/`: default local Chroma persistent databases; individual KBs can
+  point to an existing Chroma database path in `rag.toml`.
+- `~/.sarma/rag/models/`: default HuggingFace embedding model cache for RAG.
 - `skills/`: installed workspace/global skills.
 - `db.sqlite`: conversations, messages, memory artifacts, tool records.
 
@@ -345,7 +359,7 @@ They cover:
 - middleware stack and no call-limit middleware;
 - runtime services;
 - context compaction;
-- config/plugin TUI behavior;
+- config/plugin/RAG TUI behavior;
 - main TUI command/event behavior;
 - sidebar workflow graph rendering;
 - store migration and update boundaries.
@@ -354,7 +368,7 @@ Run:
 
 ```powershell
 uv run python -m compileall -q src tests scripts
-uv run pytest tests\test_runtime_boundaries.py -q
+uv run pytest tests\test_build_nuitka.py tests\test_runtime_boundaries.py -q
 uv run sarma --help
 ```
 

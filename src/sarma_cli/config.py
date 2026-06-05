@@ -1,20 +1,22 @@
 """Sarma configuration management.
 
-Configuration is split into three TOML files in both global and workspace
-scopes:
+Configuration is split into TOML files across global and workspace scopes:
 
 - ``models.toml``: named model providers.
 - ``agents.toml``: workflow/agent model, MCP, and skill permissions.
 - ``mcp.toml``: MCP server definitions.
+- ``rag.toml``: RAG chunking model and knowledge base registry.
 
-On first use in a workspace, Sarma copies the global config suite from
-``~/.sarma`` into ``./.sarma`` so the workspace can be tuned independently.
-The local workspace files are the effective files at runtime.
+Global ``models.toml`` and ``agents.toml`` are the authoritative model and
+workflow policy files. MCP servers and RAG knowledge bases are additive:
+``~/.sarma`` entries remain available, while ``./.sarma`` can add new entries
+or override entries with the same name. RAG embedding model settings are global;
+RAG knowledge base registrations may live in either scope, while default Chroma
+storage stays workspace-local.
 """
 
 from __future__ import annotations
 
-import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -154,6 +156,24 @@ _DEFAULT_MCP_TOML = """\
 # enabled = true
 """
 
+_DEFAULT_RAG_TOML = """\
+# RAG knowledge base settings.
+# `embedding_model` is independent from chat models in models.toml.
+embedding_backend = "huggingface"  # huggingface | api
+embedding_model = ""
+embedding_api_base = ""
+embedding_api_key = ""
+embedding_local_path = ""
+chunk_size = 1200
+chunk_overlap = 150
+
+# [[knowledge_bases]]
+# name = "project-docs"
+# docs_path = ""
+# chroma_path = ""
+# enabled = true
+"""
+
 
 @dataclass(slots=True)
 class ProviderConfig:
@@ -199,11 +219,32 @@ class AgentConfig:
 
 
 @dataclass(slots=True)
+class KnowledgeBaseConfig:
+    name: str = ""
+    docs_path: str = ""
+    chroma_path: str = ""
+    enabled: bool = True
+
+
+@dataclass(slots=True)
+class RagConfig:
+    embedding_backend: str = "huggingface"
+    embedding_model: str = ""
+    embedding_api_base: str = ""
+    embedding_api_key: str = ""
+    embedding_local_path: str = ""
+    chunk_size: int = 1200
+    chunk_overlap: int = 150
+    knowledge_bases: list[KnowledgeBaseConfig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class CliConfig:
     active_model: str = "default"
     models: list[ProviderConfig] = field(default_factory=list)
     mcp_servers: list[McpServerConfig] = field(default_factory=list)
     agents: list[AgentConfig] = field(default_factory=list)
+    rag: RagConfig = field(default_factory=RagConfig)
 
     @property
     def provider(self) -> ProviderConfig:
@@ -276,10 +317,12 @@ def _ensure_global_config_suite() -> None:
     g = paths.global_dir()
     g.mkdir(parents=True, exist_ok=True)
     (g / "skills").mkdir(exist_ok=True)
+    paths.rag_models_dir().mkdir(parents=True, exist_ok=True)
     defaults = {
         paths.MODELS_NAME: _DEFAULT_MODELS_TOML,
         paths.AGENTS_NAME: _DEFAULT_AGENTS_TOML,
         paths.MCP_NAME: _DEFAULT_MCP_TOML,
+        paths.RAG_NAME: _DEFAULT_RAG_TOML,
     }
     for filename, text in defaults.items():
         target = g / filename
@@ -288,18 +331,13 @@ def _ensure_global_config_suite() -> None:
 
 
 def ensure_workspace_config() -> None:
-    """Create local workspace config files by copying global files if missing."""
+    """Create local workspace directories without copying global config files."""
     _ensure_global_config_suite()
     local = paths.local_dir()
     local.mkdir(parents=True, exist_ok=True)
     (local / "skills").mkdir(exist_ok=True)
-    for filename in (paths.MODELS_NAME, paths.AGENTS_NAME, paths.MCP_NAME):
-        target = local / filename
-        if target.exists():
-            continue
-        source = paths.global_dir() / filename
-        if source.exists():
-            shutil.copy2(source, target)
+    paths.rag_docs_dir().mkdir(parents=True, exist_ok=True)
+    paths.rag_chroma_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _parse_models(data: dict[str, Any]) -> tuple[str, list[ProviderConfig]]:
@@ -360,6 +398,79 @@ def _parse_agents(data: dict[str, Any]) -> list[AgentConfig]:
     return agents
 
 
+def _parse_rag(data: dict[str, Any]) -> RagConfig:
+    chunk_size = int(data.get("chunk_size", 1200))
+    chunk_overlap = int(data.get("chunk_overlap", 150))
+    if chunk_size <= 0:
+        chunk_size = 1200
+    if chunk_overlap < 0:
+        chunk_overlap = 0
+    if chunk_overlap >= chunk_size:
+        chunk_overlap = max(0, chunk_size // 4)
+    knowledge_bases = [
+        KnowledgeBaseConfig(
+            name=str(raw.get("name", "")),
+            docs_path=str(raw.get("docs_path", "")),
+            chroma_path=str(raw.get("chroma_path", "")),
+            enabled=bool(raw.get("enabled", True)),
+        )
+        for raw in data.get("knowledge_bases", [])
+    ]
+    embedding_backend = str(data.get("embedding_backend", "huggingface")).lower()
+    if embedding_backend not in {"huggingface", "api"}:
+        embedding_backend = "huggingface"
+    return RagConfig(
+        embedding_backend=embedding_backend,
+        embedding_model=str(data.get("embedding_model") or data.get("model", "")),
+        embedding_api_base=str(data.get("embedding_api_base", "")),
+        embedding_api_key=str(data.get("embedding_api_key", "")),
+        embedding_local_path=str(data.get("embedding_local_path", "")),
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        knowledge_bases=knowledge_bases,
+    )
+
+
+def _merge_named(
+    global_items: list[Any],
+    local_items: list[Any],
+) -> list[Any]:
+    by_name: dict[str, Any] = {}
+    order: list[str] = []
+    for item in [*global_items, *local_items]:
+        name = str(getattr(item, "name", "")).strip()
+        if not name:
+            continue
+        if name not in by_name:
+            order.append(name)
+        by_name[name] = item
+    return [by_name[name] for name in order]
+
+
+def load_global_mcp_servers() -> list[McpServerConfig]:
+    """Load global MCP server definitions only."""
+    _ensure_global_config_suite()
+    return _parse_mcp(_read_toml(paths.global_mcp_file()))
+
+
+def load_local_mcp_servers() -> list[McpServerConfig]:
+    """Load workspace MCP server definitions only."""
+    ensure_workspace_config()
+    return _parse_mcp(_read_toml(paths.local_mcp_file()))
+
+
+def load_global_rag_config() -> RagConfig:
+    """Load global RAG model settings and global KB registrations."""
+    _ensure_global_config_suite()
+    return _parse_rag(_read_toml(paths.global_rag_file()))
+
+
+def load_local_rag_config() -> RagConfig:
+    """Load workspace RAG KB registrations only."""
+    ensure_workspace_config()
+    return _parse_rag(_read_toml(paths.local_rag_file()))
+
+
 def _normalize_agent_name(name: str) -> str:
     workflow, dot, subagent = name.partition(".")
     workflow = LEGACY_WORKFLOW_ALIASES.get(workflow, workflow)
@@ -367,14 +478,31 @@ def _normalize_agent_name(name: str) -> str:
 
 
 def load_config() -> CliConfig:
-    """Load the workspace config suite, creating it from global defaults first."""
+    """Load the effective config suite using global defaults plus local overlays."""
     ensure_workspace_config()
-    active, models = _parse_models(_read_toml(paths.local_models_file()))
+    active, models = _parse_models(_read_toml(paths.global_models_file()))
+    agents = _parse_agents(_read_toml(paths.global_agents_file()))
+    global_rag = load_global_rag_config()
+    local_rag = load_local_rag_config()
+    rag = RagConfig(
+        embedding_backend=global_rag.embedding_backend,
+        embedding_model=global_rag.embedding_model,
+        embedding_api_base=global_rag.embedding_api_base,
+        embedding_api_key=global_rag.embedding_api_key,
+        embedding_local_path=global_rag.embedding_local_path,
+        chunk_size=global_rag.chunk_size,
+        chunk_overlap=global_rag.chunk_overlap,
+        knowledge_bases=_merge_named(
+            global_rag.knowledge_bases,
+            local_rag.knowledge_bases,
+        ),
+    )
     return CliConfig(
         active_model=active,
         models=models,
-        mcp_servers=_parse_mcp(_read_toml(paths.local_mcp_file())),
-        agents=_parse_agents(_read_toml(paths.local_agents_file())),
+        mcp_servers=_merge_named(load_global_mcp_servers(), load_local_mcp_servers()),
+        agents=agents,
+        rag=rag,
     )
 
 
@@ -405,7 +533,7 @@ def _toml_value(v: Any) -> str:
 
 
 def save_models(config: CliConfig) -> Path:
-    """Persist the workspace models.toml file."""
+    """Persist the global models.toml file."""
     lines = [f"active = {_toml_value(config.active_model)}", ""]
     for model in config.models:
         lines.append("[[models]]")
@@ -414,14 +542,14 @@ def save_models(config: CliConfig) -> Path:
                 continue
             lines.append(f"{key} = {_toml_value(value)}")
         lines.append("")
-    target = paths.local_models_file()
+    target = paths.global_models_file()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return target
 
 
 def save_agents(config: CliConfig) -> Path:
-    """Persist the workspace agents.toml file."""
+    """Persist the global agents.toml file."""
     lines = [
         "# Sarma workflow agent routing.",
         "# `model` references a name from models.toml.",
@@ -435,7 +563,7 @@ def save_agents(config: CliConfig) -> Path:
         lines.append(f"mcp = {_toml_value(agent.mcp)}")
         lines.append(f"skills = {_toml_value(agent.skills)}")
         lines.append("")
-    target = paths.local_agents_file()
+    target = paths.global_agents_file()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return target
@@ -451,10 +579,14 @@ def _agent_sort_key(agent: AgentConfig) -> tuple[int, int, str]:
     return workflow_index, is_subagent, agent.name
 
 
-def save_mcp(config: CliConfig) -> Path:
-    """Persist the workspace mcp.toml file."""
+def save_mcp_servers(
+    servers: list[McpServerConfig],
+    *,
+    scope: str = "local",
+) -> Path:
+    """Persist a concrete MCP server list to local or global scope."""
     lines = ["# MCP servers (repeat [[mcp_servers]] for each server)", ""]
-    for server in config.mcp_servers:
+    for server in servers:
         lines.append("[[mcp_servers]]")
         for key in (
             "name",
@@ -472,7 +604,79 @@ def save_mcp(config: CliConfig) -> Path:
         ):
             lines.append(f"{key} = {_toml_value(getattr(server, key))}")
         lines.append("")
-    target = paths.local_mcp_file()
+    target = paths.global_mcp_file() if _scope(scope) == "global" else paths.local_mcp_file()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return target
+
+
+def save_rag_config(rag: RagConfig, *, scope: str = "local") -> Path:
+    """Persist a concrete RAG config to local or global scope."""
+    is_global = _scope(scope) == "global"
+    lines = [
+        "# RAG knowledge base settings.",
+    ]
+    if is_global:
+        lines.extend([
+            "# `embedding_model` is independent from chat models in models.toml.",
+            f"embedding_backend = {_toml_value(rag.embedding_backend)}",
+            f"embedding_model = {_toml_value(rag.embedding_model)}",
+            f"embedding_api_base = {_toml_value(rag.embedding_api_base)}",
+            f"embedding_api_key = {_toml_value(rag.embedding_api_key)}",
+            f"embedding_local_path = {_toml_value(rag.embedding_local_path)}",
+            f"chunk_size = {_toml_value(rag.chunk_size)}",
+            f"chunk_overlap = {_toml_value(rag.chunk_overlap)}",
+            "",
+        ])
+    else:
+        lines.extend([
+            "# Workspace files register local/private knowledge bases only.",
+            "# RAG embedding model settings are loaded from ~/.sarma/rag.toml.",
+            "",
+        ])
+
+    for kb in rag.knowledge_bases:
+        lines.append("[[knowledge_bases]]")
+        lines.append(f"name = {_toml_value(kb.name)}")
+        lines.append(f"docs_path = {_toml_value(kb.docs_path)}")
+        lines.append(f"chroma_path = {_toml_value(kb.chroma_path)}")
+        lines.append(f"enabled = {_toml_value(kb.enabled)}")
+        lines.append("")
+    target = paths.global_rag_file() if is_global else paths.local_rag_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return target
+
+
+def save_rag_model(config: CliConfig) -> Path:
+    """Persist global RAG model settings while preserving global KB entries."""
+    global_rag = load_global_rag_config()
+    rag = RagConfig(
+        embedding_backend=config.rag.embedding_backend,
+        embedding_model=config.rag.embedding_model,
+        embedding_api_base=config.rag.embedding_api_base,
+        embedding_api_key=config.rag.embedding_api_key,
+        embedding_local_path=config.rag.embedding_local_path,
+        chunk_size=config.rag.chunk_size,
+        chunk_overlap=config.rag.chunk_overlap,
+        knowledge_bases=global_rag.knowledge_bases,
+    )
+    return save_rag_config(rag, scope="global")
+
+
+def save_rag_knowledge_bases(
+    knowledge_bases: list[KnowledgeBaseConfig],
+    *,
+    scope: str = "local",
+) -> Path:
+    """Persist RAG knowledge base registrations in local or global scope."""
+    base = load_global_rag_config() if _scope(scope) == "global" else RagConfig()
+    base.knowledge_bases = knowledge_bases
+    return save_rag_config(base, scope=scope)
+
+
+def _scope(value: str) -> str:
+    scope = value.strip().lower()
+    if scope not in {"local", "workspace", "global"}:
+        raise ValueError("Scope must be local, workspace, or global.")
+    return "local" if scope == "workspace" else scope

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from sarma_cli.config import CliConfig, save_mcp
+from sarma_cli.config import CliConfig, save_mcp_servers
 
 console = Console()
 
@@ -20,9 +20,13 @@ async def cmd_plugin(config: CliConfig) -> bool:
 
     config.mcp_servers = result.mcp_servers
     try:
-        mcp_path = save_mcp(config)
+        local_path = save_mcp_servers(result.local_mcp_servers, scope="local")
+        global_path = save_mcp_servers(result.global_mcp_servers, scope="global")
     except Exception as exc:
         console.print(f"[bold white on #f85149] ERROR [/] Could not save plugin config: {exc}")
         return False
-    console.print(f"[bold white on #3fb950] OK [/] Plugin config saved: [bright_blue]{mcp_path}[/]")
+    console.print(
+        "[bold white on #3fb950] OK [/] Plugin config saved: "
+        f"[bright_blue]{local_path}[/], [bright_blue]{global_path}[/]"
+    )
     return result.restart_requested

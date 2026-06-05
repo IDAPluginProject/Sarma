@@ -126,7 +126,7 @@ class HistoryInput(Input):
         if text.startswith("/"):
             matches = [command for command in COMMANDS if command.startswith(text)]
             return [
-                command + (" " if command not in {"/help", "/status", "/models", "/history", "/clear", "/compact", "/config", "/plugin", "/restart", "/exit"} else "")
+                command + (" " if command not in {"/help", "/status", "/models", "/history", "/clear", "/compact", "/config", "/plugin", "/rag", "/restart", "/exit"} else "")
                 for command in matches
             ]
         return [entry for entry in reversed(self._history) if entry.startswith(text)]

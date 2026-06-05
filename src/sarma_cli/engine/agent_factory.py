@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
 from typing import Any
 
 from sarma_cli.engine.errors import AgentBuildError, ProviderNotConfiguredError
@@ -12,6 +13,12 @@ from sarma_cli.engine.models import AgentRunConfig, ResolvedSkill
 from sarma_cli.engine.model_factory import ModelFactory
 from sarma_cli.runtime.middleware import build_agent_middleware_for_model
 from sarma_cli.runtime.services import AgentRuntimeServices
+from sarma_cli.resources.network_tools import (
+    build_http_exchange_tool,
+    build_packet_exchange_tool,
+)
+from sarma_cli.resources.rag import build_rag_search_tool
+from sarma_cli.resources.web_tools import build_web_search_tool
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +49,13 @@ def _skill_key(skill: ResolvedSkill | None) -> dict[str, Any] | None:
         "preferred_model_name": skill.preferred_model_name,
         "temperature_override": skill.temperature_override,
     }
+
+
+def _rag_key(rag: Any) -> dict[str, Any]:
+    try:
+        return asdict(rag)
+    except TypeError:
+        return {}
 
 
 class AgentFactory:
@@ -92,8 +106,9 @@ class AgentFactory:
         # 2. Connect / reuse MCP client pool and get tools
         all_tools = await self._pool.connect(server_configs)
 
-        # 3. Apply skill tool filter
+        # 3. Apply skill tool filter and append built-in local tools.
         tools = self._apply_skill_filter(all_tools, config.skill)
+        tools.extend(self._build_builtin_tools(config))
 
         if not tools:
             logger.info(
@@ -246,6 +261,7 @@ class AgentFactory:
                 name: _skill_key(skill)
                 for name, skill in sorted(config.subagent_skills.items())
             },
+            "rag": _rag_key(config.rag),
         }
         return json.dumps(data, sort_keys=True, default=str)
 
@@ -260,11 +276,13 @@ class AgentFactory:
     ) -> list[Any]:
         """Filter tools based on skill allow/deny lists."""
         if skill is None:
-            return tools
-        return self._pool.filter_tools(
-            tools,
-            allowlist=skill.tool_allowlist,
-            denylist=skill.tool_denylist,
+            return list(tools)
+        return list(
+            self._pool.filter_tools(
+                tools,
+                allowlist=skill.tool_allowlist,
+                denylist=skill.tool_denylist,
+            )
         )
 
     def _load_subagent_models(self, providers: dict[str, Any]) -> dict[str, Any]:
@@ -272,3 +290,13 @@ class AgentFactory:
         for name, provider in providers.items():
             models[name] = self._init_model(provider, None)
         return models
+
+    def _build_builtin_tools(self, config: AgentRunConfig) -> list[Any]:
+        tools = [
+            build_web_search_tool(),
+            build_http_exchange_tool(),
+            build_packet_exchange_tool(),
+        ]
+        if any(kb.enabled and kb.name for kb in config.rag.knowledge_bases):
+            tools.append(build_rag_search_tool(config.rag))
+        return tools

@@ -1,32 +1,54 @@
 from __future__ import annotations
 
 import asyncio
+import http.server
+import socket
 import shutil
+import sys
+import threading
+import types
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from rich.console import Console
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, ListView, Select, Static
 
+from sarma_cli import paths
 from sarma_cli.config import (
     AgentConfig,
     CliConfig,
+    KnowledgeBaseConfig,
     McpServerConfig,
     ProviderConfig,
+    RagConfig,
     _parse_agents,
     _parse_models,
+    load_config,
     parse_context_window,
     save_models,
+    save_rag_knowledge_bases,
+    save_rag_model,
 )
-from sarma_cli.engine.audit_graph import _filter_tools_by_mcp, _filter_tools_by_prefix
+from sarma_cli.__main__ import main as cli_main
+from sarma_cli.engine.audit_graph import (
+    _filter_tools_by_mcp,
+    _filter_tools_by_prefix,
+    _filter_tools_by_skill,
+)
 from sarma_cli.engine.agent_factory import AgentFactory
 from sarma_cli.engine.agent_runner import AgentRunner
 from sarma_cli.engine.dto import McpServerDTO, ModelProviderDTO
 from sarma_cli.engine.enums import StreamEventType
-from sarma_cli.engine.models import AgentRunConfig, ConversationMessage, StreamEvent
+from sarma_cli.engine.models import (
+    AgentRunConfig,
+    ConversationMessage,
+    ResolvedSkill,
+    StreamEvent,
+)
 from sarma_cli.engine.mcp_pool import _connect_timeout
 from sarma_cli.engine.streaming import EventTranslator
 from sarma_cli.resources.plugins import (
@@ -35,6 +57,15 @@ from sarma_cli.resources.plugins import (
     list_mcp_quick_modes,
     validate_mcp_server,
 )
+from sarma_cli.resources.network_tools import exchange_http, exchange_packet
+from sarma_cli.resources.rag import (
+    PullResult,
+    chunk_knowledge_base,
+    pull_embedding_model,
+    search_knowledge_bases,
+    validate_chroma_database,
+)
+from sarma_cli.resources.web_tools import _parse_duckduckgo_html
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
 from sarma_cli.runtime.middleware import (
     build_agent_middleware,
@@ -47,12 +78,14 @@ from sarma_cli.session import Session
 from sarma_cli.status import render_status_panel
 from sarma_cli.context.compaction import ContextCompactor, ContextWindowPolicy
 import sarma_cli.tui.plugin_app as plugin_app_module
+import sarma_cli.tui.rag_app as rag_app_module
 from sarma_cli.tui.chat_area import AssistantMessage, ChatArea, ToolCallWidget
 from sarma_cli.tui.config_app import ConfigApp
 from sarma_cli.tui.input_bar import HistoryInput, InputBar
 from sarma_cli.tui.input_history import append_input_history, load_input_history
 from sarma_cli.tui.main_app import MainApp, StreamEventMessage
 from sarma_cli.tui.plugin_app import PluginApp
+from sarma_cli.tui.rag_app import RagApp
 from sarma_cli.tui.sidebar import Sidebar
 
 
@@ -120,7 +153,12 @@ class CountingAgentFactory(AgentFactory):
         return object()
 
 
-def _agent_run_config(message: str, *, system_prompt: str = "base") -> AgentRunConfig:
+def _agent_run_config(
+    message: str,
+    *,
+    system_prompt: str = "base",
+    rag: RagConfig | None = None,
+) -> AgentRunConfig:
     return AgentRunConfig(
         conversation_id="c1",
         provider=ModelProviderDTO(
@@ -141,6 +179,7 @@ def _agent_run_config(message: str, *, system_prompt: str = "base") -> AgentRunC
         user_message=message,
         system_prompt=system_prompt,
         mode="test",
+        rag=rag or RagConfig(),
     )
 
 
@@ -166,10 +205,162 @@ async def test_agent_factory_reuses_agent_for_same_runtime_shape() -> None:
     assert factory.agent_builds == 2
 
 
+@pytest.mark.anyio
+async def test_agent_factory_adds_rag_search_tool_for_enabled_knowledge_base() -> None:
+    pool = FakeMcpPool()
+    factory = CountingAgentFactory(pool)
+    rag = RagConfig(
+        knowledge_bases=[KnowledgeBaseConfig(name="docs", enabled=True)]
+    )
+
+    _agent, tools = await factory.build(_agent_run_config("question", rag=rag))
+
+    assert "rag_search" in [tool.name for tool in tools]
+
+
+@pytest.mark.anyio
+async def test_agent_factory_adds_default_builtin_tools() -> None:
+    pool = FakeMcpPool()
+    factory = CountingAgentFactory(pool)
+
+    _agent, tools = await factory.build(_agent_run_config("question"))
+
+    tool_names = {tool.name for tool in tools}
+    assert {"web_search", "http_exchange", "packet_exchange"} <= tool_names
+    assert "rag_search" not in tool_names
+
+
+@pytest.mark.anyio
+async def test_agent_factory_cache_key_includes_rag_config() -> None:
+    pool = FakeMcpPool()
+    factory = CountingAgentFactory(pool)
+
+    first_agent, _tools = await factory.build(_agent_run_config(
+        "question",
+        rag=RagConfig(knowledge_bases=[KnowledgeBaseConfig(name="docs")]),
+    ))
+    second_agent, _tools = await factory.build(_agent_run_config(
+        "question",
+        rag=RagConfig(knowledge_bases=[KnowledgeBaseConfig(name="private")]),
+    ))
+
+    assert second_agent is not first_agent
+    assert factory.agent_builds == 2
+
+
 def test_subagent_tool_prefix_filter_fails_closed() -> None:
     tools = [Tool("ida_mcp_decompile"), Tool("ida_mcp_disasm")]
 
     assert _filter_tools_by_prefix(tools, ["missing_tool"]) == []
+
+
+def test_subagent_tool_filters_keep_builtin_tools() -> None:
+    tools = [
+        Tool("ida_mcp_decompile"),
+        Tool("rag_search"),
+        Tool("web_search"),
+        Tool("http_exchange"),
+        Tool("packet_exchange"),
+    ]
+    builtins = ["rag_search", "web_search", "http_exchange", "packet_exchange"]
+
+    assert [tool.name for tool in _filter_tools_by_prefix(tools, ["missing"])] == [
+        *builtins,
+    ]
+    assert [tool.name for tool in _filter_tools_by_mcp(tools, [])] == builtins
+    assert [
+        tool.name
+        for tool in _filter_tools_by_skill(
+            tools,
+            ResolvedSkill(
+                name="strict",
+                tool_allowlist={"missing"},
+                tool_denylist={"rag_search"},
+            ),
+        )
+    ] == builtins
+
+
+def test_web_search_parser_extracts_duckduckgo_results() -> None:
+    body = """
+    <div class="result">
+      <h2>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Fpoc">
+          Example <b>PoC</b>
+        </a>
+      </h2>
+      <a class="result__snippet">HTTP &amp; HTTPS testing notes</a>
+    </div></div>
+    """
+
+    results = _parse_duckduckgo_html(body, 5)
+
+    assert results == [{
+        "title": "Example PoC",
+        "url": "https://example.test/poc",
+        "snippet": "HTTP & HTTPS testing notes",
+    }]
+
+
+def test_http_exchange_sends_request_to_local_http_port() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("X-Sarma-Test", "ok")
+            self.end_headers()
+            self.wfile.write(f"path={self.path}".encode("utf-8"))
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = exchange_http(
+            url=f"http://127.0.0.1:{server.server_port}/health?x=1",
+            timeout=2.0,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+    assert "status=200" in result
+    assert "X-Sarma-Test: ok" in result
+    assert "path=/health?x=1" in result
+
+
+def test_packet_exchange_sends_payload_to_local_tcp_port() -> None:
+    ready = threading.Event()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        def serve_once() -> None:
+            ready.set()
+            conn, _addr = listener.accept()
+            with conn:
+                data = conn.recv(1024)
+                conn.sendall(b"echo:" + data)
+
+        thread = threading.Thread(target=serve_once, daemon=True)
+        thread.start()
+        assert ready.wait(timeout=1.0)
+
+        result = exchange_packet(
+            host="127.0.0.1",
+            port=port,
+            protocol="tcp",
+            payload="hello",
+            timeout=2.0,
+        )
+        thread.join(timeout=2.0)
+
+    assert "sent_bytes=5 received_bytes=10" in result
+    assert "echo:hello" in result
 
 
 def test_event_translator_resolves_langgraph_v2_subagent_namespace() -> None:
@@ -600,6 +791,7 @@ def test_model_sampling_settings_are_fixed_and_not_saved(monkeypatch) -> None:
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
 
     active, models = _parse_models({
         "active": "default",
@@ -627,6 +819,370 @@ def test_parse_context_window_accepts_k_and_m_suffixes() -> None:
     assert parse_context_window("200K") == 200_000
     assert parse_context_window("1M") == 1_000_000
     assert parse_context_window("128,000") == 128_000
+
+
+def test_config_merges_global_and_local_resources(monkeypatch) -> None:
+    workspace = Path("build/test-config-layering").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
+
+    paths.global_dir().mkdir(parents=True)
+    paths.local_dir().mkdir(parents=True)
+    paths.global_models_file().write_text(
+        """
+active = "global"
+
+[[models]]
+name = "global"
+model_name = "gpt-global"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.local_models_file().write_text(
+        """
+active = "local"
+
+[[models]]
+name = "local"
+model_name = "gpt-local"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.global_mcp_file().write_text(
+        """
+[[mcp_servers]]
+name = "shared"
+transport = "http"
+url = "https://global.example/mcp"
+enabled = true
+
+[[mcp_servers]]
+name = "global-only"
+transport = "http"
+url = "https://global-only.example/mcp"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.local_mcp_file().write_text(
+        """
+[[mcp_servers]]
+name = "shared"
+transport = "http"
+url = "https://local.example/mcp"
+enabled = false
+
+[[mcp_servers]]
+name = "local-only"
+transport = "stdio"
+command = "python"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.global_rag_file().write_text(
+        """
+embedding_backend = "huggingface"
+embedding_model = "BAAI/bge-small-en-v1.5"
+chunk_size = 800
+chunk_overlap = 80
+
+[[knowledge_bases]]
+name = "shared-kb"
+chroma_path = "global-chroma"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    paths.local_rag_file().write_text(
+        """
+embedding_backend = "api"
+embedding_model = "ignored-local-model"
+
+[[knowledge_bases]]
+name = "shared-kb"
+chroma_path = "local-chroma"
+enabled = false
+
+[[knowledge_bases]]
+name = "local-kb"
+chroma_path = "local-only-chroma"
+enabled = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        config = load_config()
+
+        assert config.active_model == "global"
+        assert [model.name for model in config.models] == ["global"]
+        mcp = {server.name: server for server in config.mcp_servers}
+        assert set(mcp) == {"shared", "global-only", "local-only"}
+        assert mcp["shared"].url == "https://local.example/mcp"
+        assert mcp["shared"].enabled is False
+        assert config.rag.embedding_backend == "huggingface"
+        assert config.rag.embedding_model == "BAAI/bge-small-en-v1.5"
+        rag = {kb.name: kb for kb in config.rag.knowledge_bases}
+        assert set(rag) == {"shared-kb", "local-kb"}
+        assert rag["shared-kb"].chroma_path == "local-chroma"
+        assert rag["shared-kb"].enabled is False
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_rag_config_is_saved_and_loaded(monkeypatch) -> None:
+    workspace = Path("build/test-rag-config").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
+    try:
+        config = load_config()
+        config.rag = RagConfig(
+            embedding_backend="api",
+            embedding_model="text-embedding-3-large",
+            embedding_api_base="https://embedding.example/v1",
+            embedding_api_key="secret",
+            embedding_local_path="",
+            chunk_size=512,
+            chunk_overlap=64,
+            knowledge_bases=[
+                KnowledgeBaseConfig(
+                    name="docs",
+                    docs_path="custom-docs",
+                    chroma_path="custom-chroma",
+                    enabled=True,
+                ),
+            ],
+        )
+
+        model_path = save_rag_model(config)
+        kb_path = save_rag_knowledge_bases(config.rag.knowledge_bases)
+        loaded = load_config()
+
+        assert model_path == workspace / "global" / "rag.toml"
+        assert kb_path == workspace / ".sarma" / "rag.toml"
+        assert loaded.rag.embedding_backend == "api"
+        assert loaded.rag.embedding_model == "text-embedding-3-large"
+        assert loaded.rag.embedding_api_base == "https://embedding.example/v1"
+        assert loaded.rag.embedding_api_key == "secret"
+        assert loaded.rag.chunk_size == 512
+        assert loaded.rag.chunk_overlap == 64
+        assert loaded.rag.knowledge_bases == [
+            KnowledgeBaseConfig(
+                name="docs",
+                docs_path="custom-docs",
+                chroma_path="custom-chroma",
+                enabled=True,
+            ),
+        ]
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_rag_chunking_writes_chroma_database(monkeypatch) -> None:
+    workspace = Path("build/test-rag-chunking").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    docs = workspace / "custom-docs"
+    chroma = workspace / "custom-chroma"
+    docs.mkdir(parents=True)
+    (docs / "a.md").write_text("alpha\n" * 40, encoding="utf-8")
+    (docs / "ignored.bin").write_bytes(b"\x00\x01\x02")
+    monkeypatch.chdir(workspace)
+    captured: dict[str, object] = {}
+
+    def fake_write_chroma_documents(kb, rag, records, persist_directory) -> None:
+        captured["kb"] = kb.name
+        captured["records"] = records
+        Path(persist_directory).mkdir(parents=True, exist_ok=True)
+        (Path(persist_directory) / "chroma.sqlite3").write_text("", encoding="utf-8")
+
+    def fake_search_chroma_database(kb, rag, query, top_k):
+        assert query == "alpha"
+        return [("alpha chunk", {"knowledge_base": kb.name, "source": "a.md"}, 0.1)]
+
+    monkeypatch.setattr(
+        "sarma_cli.resources.rag._write_chroma_documents",
+        fake_write_chroma_documents,
+    )
+    monkeypatch.setattr(
+        "sarma_cli.resources.rag._search_chroma_database",
+        fake_search_chroma_database,
+    )
+    try:
+        result = chunk_knowledge_base(
+            KnowledgeBaseConfig(
+                name="docs",
+                docs_path=str(docs),
+                chroma_path=str(chroma),
+            ),
+            RagConfig(
+                embedding_model="text-embedding-3-large",
+                chunk_size=80,
+                chunk_overlap=10,
+            ),
+        )
+
+        assert result.files == 1
+        assert result.chunks > 1
+        assert result.output_path == chroma
+        assert (chroma / "chroma.sqlite3").is_file()
+        assert captured["kb"] == "docs"
+
+        search_result = search_knowledge_bases(
+            RagConfig(
+                embedding_model="text-embedding-3-large",
+                chunk_size=80,
+                chunk_overlap=10,
+                knowledge_bases=[
+                    KnowledgeBaseConfig(name="docs", chroma_path=str(chroma)),
+                ],
+            ),
+            query="alpha",
+        )
+        assert "RAG search results" in search_result
+        assert "knowledge_base=docs" in search_result
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_rag_pull_embedding_model_uses_huggingface_snapshot(monkeypatch) -> None:
+    workspace = Path("build/test-rag-pull-model").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
+    calls: dict[str, object] = {}
+
+    def fake_snapshot_download(
+        *,
+        repo_id: str,
+        local_dir: str,
+        local_dir_use_symlinks: bool,
+    ) -> str:
+        calls["repo_id"] = repo_id
+        calls["local_dir_use_symlinks"] = local_dir_use_symlinks
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return local_dir
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    try:
+        result = pull_embedding_model(RagConfig(
+            embedding_backend="huggingface",
+            embedding_model="BAAI/bge-small-en-v1.5",
+        ))
+
+        assert calls["repo_id"] == "BAAI/bge-small-en-v1.5"
+        assert result.path == (
+            workspace / "global" / "rag" / "models" / "BAAI-bge-small-en-v1.5"
+        )
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_rag_cli_splits_docs_and_registers_existing_chroma(monkeypatch) -> None:
+    workspace = Path("build/test-rag-cli").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    docs = workspace / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("bravo\n" * 30, encoding="utf-8")
+    imported = workspace / "imported-chroma"
+    imported.mkdir()
+    (imported / "chroma.sqlite3").write_text("", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
+    runner = CliRunner()
+
+    def fake_write_chroma_documents(_kb, _rag, _records, persist_directory) -> None:
+        Path(persist_directory).mkdir(parents=True, exist_ok=True)
+        (Path(persist_directory) / "chroma.sqlite3").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sarma_cli.resources.rag._write_chroma_documents",
+        fake_write_chroma_documents,
+    )
+
+    try:
+        split_result = runner.invoke(cli_main, [
+            "rag",
+            "--backend",
+            "huggingface",
+            "--model",
+            "text-embedding-3-large",
+            "--local-path",
+            str(workspace / "models" / "embed"),
+            "--name",
+            "docs",
+            "--split",
+            str(docs),
+            "--chroma-path",
+            str(workspace / "out-chroma"),
+        ])
+        assert split_result.exit_code == 0, split_result.output
+
+        add_result = runner.invoke(cli_main, [
+            "rag",
+            "--name",
+            "imported",
+            "--add",
+            str(imported),
+        ])
+        assert add_result.exit_code == 0, add_result.output
+
+        loaded = load_config()
+        assert loaded.rag.embedding_backend == "huggingface"
+        assert loaded.rag.embedding_model == "text-embedding-3-large"
+        assert loaded.rag.embedding_local_path == str(workspace / "models" / "embed")
+        by_name = {kb.name: kb for kb in loaded.rag.knowledge_bases}
+        assert by_name["docs"].docs_path == str(docs.resolve())
+        assert by_name["docs"].chroma_path == str((workspace / "out-chroma").resolve())
+        assert by_name["imported"].chroma_path == str(imported.resolve())
+        assert (workspace / "out-chroma" / "chroma.sqlite3").is_file()
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_rag_chroma_database_validation_requires_persist_directory() -> None:
+    workspace = Path("build/test-rag-chroma-db-validation").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    try:
+        valid = workspace / "chroma"
+        valid.mkdir()
+        (valid / "chroma.sqlite3").write_text("", encoding="utf-8")
+
+        assert validate_chroma_database(valid).path == valid
+
+        invalid = workspace / "invalid"
+        invalid.mkdir()
+
+        with pytest.raises(ValueError, match="chroma.sqlite3"):
+            validate_chroma_database(invalid)
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 def test_legacy_chat_agent_is_migrated_to_ruflo() -> None:
@@ -941,7 +1497,12 @@ async def test_history_input_navigation_and_completion() -> None:
 
 
 @pytest.mark.anyio
-async def test_plugin_app_switches_mcp_and_skill_panes() -> None:
+async def test_plugin_app_switches_mcp_and_skill_panes(monkeypatch) -> None:
+    workspace = Path("build/test-plugin-app-switch").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
     app = PluginApp(CliConfig())
 
     async with app.run_test():
@@ -977,7 +1538,12 @@ async def test_plugin_app_switches_mcp_and_skill_panes() -> None:
 
 
 @pytest.mark.anyio
-async def test_plugin_app_populates_configured_mcp_for_editing() -> None:
+async def test_plugin_app_populates_configured_mcp_for_editing(monkeypatch) -> None:
+    workspace = Path("build/test-plugin-app-edit").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
     app = PluginApp(CliConfig(mcp_servers=[
         McpServerConfig(
             name="ida-mcp",
@@ -999,7 +1565,12 @@ async def test_plugin_app_populates_configured_mcp_for_editing() -> None:
 
 
 @pytest.mark.anyio
-async def test_plugin_app_current_mcp_ignores_hidden_transport_fields() -> None:
+async def test_plugin_app_current_mcp_ignores_hidden_transport_fields(monkeypatch) -> None:
+    workspace = Path("build/test-plugin-app-current").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
     app = PluginApp(CliConfig())
 
     async with app.run_test():
@@ -1029,6 +1600,11 @@ async def test_plugin_app_current_mcp_ignores_hidden_transport_fields() -> None:
 
 @pytest.mark.anyio
 async def test_plugin_app_check_mcp_shows_loading_state(monkeypatch) -> None:
+    workspace = Path("build/test-plugin-app-check").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -1063,6 +1639,11 @@ async def test_plugin_app_check_mcp_shows_loading_state(monkeypatch) -> None:
 
 @pytest.mark.anyio
 async def test_plugin_app_skillhub_results_install_from_right_pane(monkeypatch) -> None:
+    workspace = Path("build/test-plugin-app-skillhub").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("SARMA_HOME", str(workspace / "global"))
     installed: list[tuple[str, str]] = []
 
     def fake_search(_query: str, *, registry_url: str) -> list[plugin_app_module.SkillSearchResult]:
@@ -1099,6 +1680,91 @@ async def test_plugin_app_skillhub_results_install_from_right_pane(monkeypatch) 
 
         assert installed == [("https://example.test/demo-skill.zip", "workspace")]
         assert "Skill installed and validated" in app.status
+
+
+@pytest.mark.anyio
+async def test_rag_app_lists_knowledge_bases_read_only(monkeypatch) -> None:
+    workspace = Path("build/test-rag-app").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    app = RagApp(CliConfig(
+        models=[ProviderConfig(name="default", model_name="gpt-4o")],
+        rag=RagConfig(
+            knowledge_bases=[
+                KnowledgeBaseConfig(
+                    name="docs",
+                    chroma_path=str(workspace / "chroma" / "docs"),
+                    enabled=True,
+                )
+            ]
+        ),
+    ))
+
+    try:
+        async with app.run_test():
+            app.section = "Knowledge Bases"
+            await app._refresh_items()
+            await app._refresh_fields()
+
+            assert app._item_labels() == ["docs [enabled]"]
+            assert len(app.query("#kb-name")) == 0
+            assert "Knowledge bases are registered" in str(
+                app.query_one("#description", Static).content
+            )
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+@pytest.mark.anyio
+async def test_rag_app_configures_embedding_model_and_pull(monkeypatch) -> None:
+    workspace = Path("build/test-rag-app-model").resolve()
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+
+    def fake_pull(rag: RagConfig) -> PullResult:
+        return PullResult(
+            model=rag.embedding_model,
+            path=workspace / "models" / "bge",
+        )
+
+    monkeypatch.setattr(rag_app_module, "pull_embedding_model", fake_pull)
+    app = RagApp(CliConfig())
+
+    try:
+        async with app.run_test():
+            assert app.query_one("#rag-embedding-api-base", Input).display is False
+            assert app.query_one("#rag-embedding-api-key", Input).display is False
+            assert app.query_one("#rag-embedding-local-path", Input).display is True
+
+            app.query_one("#rag-embedding-backend", Select).value = "api"
+            app.rag.embedding_backend = "api"
+            app._refresh_model_field_visibility()
+            app.query_one("#rag-embedding-model", Input).value = "text-embedding-3-large"
+            app.query_one("#rag-embedding-api-base", Input).value = "https://embed.test/v1"
+            app.query_one("#rag-embedding-api-key", Input).value = "secret"
+
+            assert app._apply_fields()
+            assert app.rag.embedding_backend == "api"
+            assert app.rag.embedding_model == "text-embedding-3-large"
+            assert app.rag.embedding_api_base == "https://embed.test/v1"
+            assert app.rag.embedding_api_key == "secret"
+
+            app.query_one("#rag-embedding-backend", Select).value = "huggingface"
+            app.rag.embedding_backend = "huggingface"
+            app._refresh_model_field_visibility()
+            assert app.query_one("#rag-embedding-api-base", Input).display is False
+            assert app.query_one("#rag-embedding-api-key", Input).display is False
+            assert app.query_one("#rag-embedding-local-path", Input).display is True
+            await app._pull_model()
+
+            assert app.rag.embedding_local_path == str(workspace / "models" / "bge")
+            assert "Pulled embedding model" in app.status
+    finally:
+        monkeypatch.chdir(Path(__file__).resolve().parents[1])
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 @pytest.mark.anyio
@@ -1140,6 +1806,14 @@ async def test_main_app_handles_core_commands_inside_textual() -> None:
         bar._submit_input()
         await pilot.pause()
         assert type(app.screen).__name__ == "PluginScreen"
+
+        app.screen.dismiss(None)
+        await pilot.pause()
+
+        input_widget.value = "/rag"
+        bar._submit_input()
+        await pilot.pause()
+        assert type(app.screen).__name__ == "RagScreen"
 
         app.screen.dismiss(None)
         await pilot.pause()

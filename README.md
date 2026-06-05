@@ -8,7 +8,8 @@
 
 Sarma is a full-screen terminal agent for vulnerability auditing. It combines a
 Textual chat interface, LangGraph workflows, LangChain agents, MCP tools, and
-workspace-scoped configuration for reverse-engineering and security review.
+layered global/workspace configuration for reverse-engineering and security
+review.
 
 Sarma is designed for tool-heavy audits such as IDA-MCP based binary analysis,
 but the runtime can use any configured MCP server.
@@ -22,6 +23,10 @@ but the runtime can use any configured MCP server.
 - `audit-slim`: compact recon/hunter/verify/report workflow.
 - Per-workflow and per-agent model, MCP, and skill configuration.
 - MCP management and skill installation through `/plugin`.
+- RAG support through `/rag` for global embedding model settings and
+  `sarma rag` for local Chroma knowledge base registration/chunking.
+- Built-in `web_search`, `http_exchange`, and `packet_exchange` tools for
+  public research and HTTP/HTTPS or raw port testing.
 - Context compaction based on each model's configured context window.
 - Native release packaging: Windows MSI, macOS pkg, Linux deb, and Linux
   Arch-style pkg.tar.zst.
@@ -160,6 +165,7 @@ START -> recon -> hunter <-> verify -> report -> END
 | `/resume <id>` | Resume a previous conversation |
 | `/config` | Open model and workflow configuration |
 | `/plugin` | Manage MCP servers and skills |
+| `/rag` | Configure the global RAG embedding model and inspect knowledge bases |
 | `/restart` | Restart runtime resources |
 | `/compact` | Compact older context into structured memory |
 | `/clear` | Clear the current conversation |
@@ -167,17 +173,51 @@ START -> recon -> hunter <-> verify -> report -> END
 
 ## Configuration Files
 
-Sarma creates global defaults under `~/.sarma` and copies missing files into the
-workspace `./.sarma`. The workspace files are the effective runtime config.
+Sarma creates global defaults under `~/.sarma`. Workspace files under
+`./.sarma` are additive overlays for local resources; they are not copies of
+global config.
+
+Global config:
 
 ```text
-./.sarma/
+~/.sarma/
   models.toml
   agents.toml
   mcp.toml
+  rag.toml
+  rag/
+    models/
+  skills/
+```
+
+Workspace config and data:
+
+```text
+./.sarma/
+  mcp.toml
+  rag.toml
+  rag/
+    docs/
+    chroma/
   skills/
   db.sqlite
 ```
+
+Runtime merging rules:
+
+- `models.toml` and `agents.toml` are global and are edited by `/config`.
+- MCP servers are `global + workspace`; a workspace server with the same name
+  overrides the global entry, but other global MCP servers remain available.
+- Skills are directory resources under `skills/<name>/SKILL.md`; workspace
+  skills take precedence over global skills with the same name.
+- RAG embedding model settings are global and are edited by `/rag` or
+  `sarma rag --model ...`.
+- RAG knowledge bases are `global + workspace`, defaulting to workspace-local
+  Chroma databases under `./.sarma/rag/chroma/<knowledge-base>/`.
+
+`/plugin` lets MCP servers and skill installs choose `workspace` or `global`
+scope. `sarma rag --global` registers a knowledge base in global `rag.toml`;
+without `--global`, it registers only in the current workspace.
 
 `models.toml`:
 
@@ -219,6 +259,82 @@ transport = "http" # stdio | http | sse
 url = "http://127.0.0.1:8000/mcp"
 enabled = true
 ```
+
+`rag.toml`:
+
+```toml
+embedding_backend = "huggingface" # huggingface | api
+embedding_model = "text-embedding-3-large"
+embedding_api_base = ""
+embedding_api_key = ""
+embedding_local_path = ""
+chunk_size = 1200
+chunk_overlap = 150
+
+[[knowledge_bases]]
+name = "project-docs"
+docs_path = ""
+chroma_path = ""
+enabled = true
+```
+
+Use `/rag` to configure the global embedding backend/model, pull HuggingFace
+models into the global model cache, and inspect registered knowledge bases.
+Use the `sarma rag` CLI to register, split, and import knowledge bases.
+
+Embedding backends:
+
+- `huggingface`: uses `langchain-huggingface` and can pull/cache the model under
+  `~/.sarma/rag/models/<model>/` or `embedding_local_path`.
+- `api`: uses an OpenAI-compatible embeddings API through `embedding_api_base`
+  and `embedding_api_key`.
+
+If `docs_path` or `chroma_path` is empty, Sarma uses:
+
+- source documents: `./.sarma/rag/docs/<knowledge-base>/`;
+- Chroma database: `./.sarma/rag/chroma/<knowledge-base>/`.
+
+The RAG embedding model is independent from chat models in `models.toml`; the
+primary agent model is not used for document chunking or future vectorization.
+
+The same behavior is available from the CLI:
+
+```bash
+sarma rag --backend huggingface --model BAAI/bge-small-en-v1.5 --pull
+sarma rag --backend api --model text-embedding-3-large --api-base https://api.example/v1
+sarma rag --name project-docs --split ./docs
+sarma rag --name project-docs --split ./docs --chroma-path ./.sarma/rag/chroma/project-docs
+sarma rag --name imported-kb --add ./.sarma/rag/chroma/imported-kb
+sarma rag --global --name shared-kb --add /absolute/path/to/chroma
+```
+
+`--add` registers an existing Chroma persistent directory only. The directory
+must contain Chroma's `chroma.sqlite3` file, for example:
+
+```text
+./.sarma/rag/chroma/project-docs/
+  chroma.sqlite3
+  <Chroma segment/index files>
+```
+
+When at least one knowledge base is enabled, Sarma attaches a built-in
+`rag_search` tool to the existing workflow agents. RAG is not a separate agent;
+agents call `rag_search` when they need private knowledge.
+
+## Built-In Agent Tools
+
+Sarma mounts local built-in tools on the existing workflow agents:
+
+| Tool | Purpose |
+|------|---------|
+| `rag_search` | Search enabled local RAG knowledge bases |
+| `web_search` | Search the public web for compact titles, URLs, and snippets |
+| `http_exchange` | Send HTTP/HTTPS requests to a target host, port, path, and method |
+| `packet_exchange` | Send raw TCP, UDP, or TLS payloads and capture the response |
+
+`http_exchange` is the preferred tool for HTTP/HTTPS service checks. Use
+`packet_exchange` when the agent needs a lower-level payload, a non-HTTP
+protocol, or a deliberately malformed request.
 
 ## Context And State
 

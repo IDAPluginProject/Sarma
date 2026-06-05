@@ -25,6 +25,7 @@ from sarma_cli.engine.models import (
     ResolvedSkill,
     StreamEvent,
 )
+from sarma_cli.config import RagConfig
 from sarma_cli.engine.streaming import EventTranslator
 from sarma_cli.engine.enums import StreamEventType
 
@@ -49,6 +50,7 @@ class AgentRunner:
         subagent_providers: dict[str, ModelProviderDTO] | None = None,
         subagent_mcp_allow: dict[str, list[str] | None] | None = None,
         subagent_skills: dict[str, ResolvedSkill | None] | None = None,
+        rag: RagConfig | None = None,
     ) -> None:
         self._factory = factory
         self._pool = pool
@@ -63,6 +65,7 @@ class AgentRunner:
         self._subagent_providers = subagent_providers or {}
         self._subagent_mcp_allow = subagent_mcp_allow or {}
         self._subagent_skills = subagent_skills or {}
+        self._rag = rag or RagConfig()
         self.assistant_content = ""
         self.reasoning_content = ""
         self.tool_calls: list[StreamEvent] = []
@@ -81,6 +84,7 @@ class AgentRunner:
             subagent_providers=self._subagent_providers,
             subagent_mcp_allow=self._subagent_mcp_allow,
             subagent_skills=self._subagent_skills,
+            rag=self._rag,
         )
 
         agent, _tools = await self._factory.build(self.run_config)

@@ -6,6 +6,7 @@ COMMANDS: dict[str, str] = {
     "/graph": "Show current workflow execution graph",
     "/workflow": "List workflows or switch workflow (/workflow <name>)",
     "/plugin": "Manage MCP and skill plugins",
+    "/rag": "Configure RAG embedding model and inspect knowledge bases",
     "/restart": "Restart current workflow runtime",
     "/models": "Show configured models",
     "/history": "List past conversations",

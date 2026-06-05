@@ -66,6 +66,10 @@ class MainCommandController:
             await self._app.handle_plugin_command()
             return
 
+        if cmd_lower == "/rag":
+            await self._app.handle_rag_command()
+            return
+
         if cmd_lower == "/restart":
             if self._app.session:
                 await self._app.session.restart_runtime()

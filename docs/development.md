@@ -72,13 +72,31 @@ Files:
 - `src/sarma_cli/config.py`
 - `src/sarma_cli/paths.py`
 - `src/sarma_cli/store.py`
+- `src/sarma_cli/resources/rag.py`
 
 Rules:
 
-- Config code loads/saves TOML and validates local shape.
+- Config code loads/saves TOML and validates file shape.
+- Model providers, workflow agent policy, and RAG embedding model settings are
+  global config. MCP servers and RAG knowledge bases are additive global +
+  workspace resources; workspace entries override only entries with the same
+  name.
 - It must not connect MCP servers or build agents.
 - Store migrations must be explicit and tested.
 - `Store.update_conversation()` must keep its allowlist behavior.
+- RAG knowledge base registration is config. Empty paths default to
+  `./.sarma/rag/docs/<knowledge-base>/` for source documents and
+  `./.sarma/rag/chroma/<knowledge-base>/` for Chroma persistent storage, but
+  each knowledge base can override both paths.
+- RAG `embedding_backend`/`embedding_model` is independent from chat models in
+  `models.toml` and is stored globally. HuggingFace model pull/cache logic
+  lives in `resources/rag.py` and defaults to `~/.sarma/rag/models/`; API
+  embeddings use OpenAI-compatible embedding settings.
+- RAG search is exposed as the built-in `rag_search` tool on existing agents,
+  not as a separate RAG agent.
+- Built-in research and network tools live under `resources/` and are attached
+  by `AgentFactory`. `http_exchange` is the high-level HTTP/HTTPS port testing
+  tool; `packet_exchange` is the lower-level TCP/UDP/TLS fallback.
 
 ### Runtime Policy
 
@@ -199,6 +217,21 @@ When adding a routed branch:
 Do not force visible subagent answers to start with routing JSON unless this is
 explicitly a fallback compatibility path.
 
+## Adding A Built-In Tool
+
+Built-in tools are local LangChain tools added by `AgentFactory`; they are not
+MCP servers and not separate workflow agents.
+
+Checklist:
+
+- Put resource logic under `src/sarma_cli/resources/`.
+- Add a `build_<name>_tool()` function that returns a LangChain tool.
+- Attach it in `AgentFactory._build_builtin_tools()`.
+- If audit subagents must keep access after MCP filtering, add the tool name to
+  `BUILTIN_TOOL_NAMES` in `engine/audit_graph.py`.
+- Add boundary tests for default mounting and audit filter preservation.
+- Document user-visible behavior in README and README_CN.
+
 ## Cache Policy
 
 Cache is currently disabled by design.
@@ -233,6 +266,8 @@ Textual files:
 - `sidebar.py`: runtime status and workflow graph.
 - `config_app.py`: model/workflow config screen.
 - `plugin_app.py`: MCP/skill management screen.
+- `rag_app.py`: global RAG embedding model config and read-only knowledge base
+  inventory screen. KB registration/chunking belongs to the CLI.
 - `theme/`: shared CSS/theme fragments.
 
 Rules:

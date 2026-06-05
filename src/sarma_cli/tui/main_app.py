@@ -16,7 +16,13 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.worker import get_current_worker
 
-from sarma_cli.config import CliConfig, save_agents, save_mcp, save_models
+from sarma_cli.config import (
+    CliConfig,
+    save_agents,
+    save_mcp_servers,
+    save_models,
+    save_rag_model,
+)
 from sarma_cli.engine.enums import StreamEventType
 from sarma_cli.engine.models import StreamEvent
 from sarma_cli.runtime.resolver import RuntimePolicyResolver
@@ -28,6 +34,7 @@ from sarma_cli.tui.config_app import ConfigScreen
 from sarma_cli.tui.input_bar import InputBar, UserInputSubmitted
 from sarma_cli.tui.main_commands import MainCommandController
 from sarma_cli.tui.plugin_app import PluginScreen
+from sarma_cli.tui.rag_app import RagScreen
 from sarma_cli.tui.sidebar import Sidebar
 from sarma_cli.workflows import get_registry, init_workflows
 
@@ -364,6 +371,9 @@ class MainApp(App[None]):
     async def handle_plugin_command(self) -> None:
         await self._handle_plugin_command()
 
+    async def handle_rag_command(self) -> None:
+        await self._handle_rag_command()
+
     def _handle_workflow_command(self, cmd: str) -> None:
         chat = self.query_one(ChatArea)
         sidebar = self.query_one(Sidebar)
@@ -532,7 +542,8 @@ class MainApp(App[None]):
             return
         self.config.mcp_servers = result.mcp_servers
         try:
-            mcp_path = save_mcp(self.config)
+            local_mcp_path = save_mcp_servers(result.local_mcp_servers, scope="local")
+            global_mcp_path = save_mcp_servers(result.global_mcp_servers, scope="global")
         except Exception as exc:
             chat.add_system_message(f"Could not save plugin config: {exc}")
             self.query_one(InputBar).focus_input()
@@ -546,7 +557,31 @@ class MainApp(App[None]):
                 self.session.pool.is_connected,
                 servers=self._mcp_statuses(workflow),
             )
-        self.notify_status(f"Plugin config saved to {mcp_path}.")
+        self.notify_status(
+            f"Plugin config saved to {local_mcp_path} and {global_mcp_path}."
+        )
+        self.query_one(InputBar).focus_input()
+
+    async def _handle_rag_command(self) -> None:
+        self.push_screen(RagScreen(self.config), self._on_rag_result)
+
+    def _on_rag_result(self, result: Any) -> None:
+        self.run_worker(self._apply_rag_result(result), thread=False)
+
+    async def _apply_rag_result(self, result: Any) -> None:
+        chat = self.query_one(ChatArea)
+        if result is None:
+            self.notify_status("RAG panel closed without saving.")
+            self.query_one(InputBar).focus_input()
+            return
+        self.config.rag = result.rag
+        try:
+            rag_path = save_rag_model(self.config)
+        except Exception as exc:
+            chat.add_system_message(f"Could not save RAG config: {exc}")
+            self.query_one(InputBar).focus_input()
+            return
+        self.notify_status(f"RAG config saved to {rag_path}.")
         self.query_one(InputBar).focus_input()
 
     def action_clear(self) -> None:

@@ -59,13 +59,24 @@ class AuditState(TypedDict, total=False):
     current_stage: str
 
 
+BUILTIN_TOOL_NAMES = {"rag_search", "web_search", "http_exchange", "packet_exchange"}
+
+
+def _is_builtin_tool(tool: Any) -> bool:
+    return getattr(tool, "name", "") in BUILTIN_TOOL_NAMES
+
+
 def _filter_tools_by_prefix(
     all_tools: list[Any], prefixes: list[str] | None
 ) -> list[Any]:
     """Filter tools whose name starts with any of the given prefixes."""
     if not prefixes or not all_tools:
         return list(all_tools)
-    matched = [t for t in all_tools if any(_tool_name_matches(t.name, p) for p in prefixes)]
+    matched = [
+        t
+        for t in all_tools
+        if _is_builtin_tool(t) or any(_tool_name_matches(t.name, p) for p in prefixes)
+    ]
     return matched
 
 
@@ -84,10 +95,14 @@ def _filter_tools_by_mcp(
 ) -> list[Any]:
     if allowed_servers is None:
         return list(all_tools)
+    builtins = [tool for tool in all_tools if _is_builtin_tool(tool)]
     if not allowed_servers:
-        return []
+        return builtins
     result = []
     for tool in all_tools:
+        if _is_builtin_tool(tool):
+            result.append(tool)
+            continue
         name = getattr(tool, "name", "")
         if any(
             name == server
@@ -108,9 +123,13 @@ def _filter_tools_by_skill(
         return list(all_tools)
     result = list(all_tools)
     if skill.tool_allowlist is not None:
-        result = [t for t in result if t.name in skill.tool_allowlist]
+        result = [
+            t for t in result if _is_builtin_tool(t) or t.name in skill.tool_allowlist
+        ]
     if skill.tool_denylist is not None:
-        result = [t for t in result if t.name not in skill.tool_denylist]
+        result = [
+            t for t in result if _is_builtin_tool(t) or t.name not in skill.tool_denylist
+        ]
     return result
 
 
