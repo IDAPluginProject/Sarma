@@ -65,6 +65,16 @@ def _find_binary(nuitka_dir: Path, platform_name: str) -> Path:
     raise SystemExit(f"No {name} found under {nuitka_dir}. Build with Nuitka first.")
 
 
+def _find_wix() -> str | None:
+    wix = shutil.which("wix")
+    if wix:
+        return wix
+    candidate = Path.home() / ".dotnet" / "tools" / "wix.exe"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
 def _copy_executable(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
@@ -175,9 +185,14 @@ def package_pkg(binary: Path, out_dir: Path, version: str, arch: str) -> Path:
 
 
 def package_msi(binary: Path, out_dir: Path, version: str, arch: str) -> Path:
-    wix = shutil.which("wix")
+    wix = _find_wix()
     if not wix:
-        raise SystemExit("wix not found. Install WiX Toolset first: dotnet tool install --global wix")
+        raise SystemExit(
+            "wix not found. Install the .NET SDK first if 'dotnet' is missing: "
+            "winget install --id Microsoft.DotNet.SDK.8 --exact --source winget. "
+            "Then install WiX Toolset: dotnet tool install --global wix. "
+            "Or run: scripts\\install_windows_packaging_tools.ps1"
+        )
     work = out_dir / "work" / f"msi-{arch}"
     work.mkdir(parents=True, exist_ok=True)
     wxs = work / "sarma.wxs"

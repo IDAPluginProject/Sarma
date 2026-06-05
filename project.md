@@ -29,12 +29,19 @@ Sarma/
 │   ├── development.md
 │   └── superpowers/plans/
 ├── scripts/
+│   ├── build_native_release.py
+│   ├── build_native_windows.ps1
+│   ├── build_native_linux.sh
+│   ├── build_native_macos.sh
 │   ├── build_nuitka.py
 │   ├── build_nuitka.ps1
 │   ├── build_nuitka.sh
+│   ├── package_native.py
+│   ├── install_windows_packaging_tools.ps1
 │   ├── install.ps1
 │   └── install.sh
 ├── tests/
+│   ├── test_build_nuitka.py
 │   └── test_runtime_boundaries.py
 └── src/
     ├── main.py

@@ -119,6 +119,11 @@ def _platform_output_dir(target_platform: str) -> Path:
     return DEFAULT_OUTPUT_DIR / f"{target_platform}-{machine}"
 
 
+def _is_linux_arm64_build(args: argparse.Namespace) -> bool:
+    machine = platform.machine().lower()
+    return args.target_platform == "linux" and machine in {"arm64", "aarch64"}
+
+
 def _platform_options(args: argparse.Namespace) -> list[str]:
     options: list[str] = []
     if args.target_platform == "windows":
@@ -138,7 +143,22 @@ def _platform_options(args: argparse.Namespace) -> list[str]:
         # Keep the binary CLI-shaped; desktop/app-bundle options are not useful
         # for Sarma's terminal UI.
         options.append("--static-libpython=no")
+        if _is_linux_arm64_build(args):
+            options.append("--clang")
     return options
+
+
+def _build_environment(args: argparse.Namespace) -> dict[str, str] | None:
+    if not _is_linux_arm64_build(args):
+        return None
+
+    env = os.environ.copy()
+    env.setdefault("CC", "clang")
+    env.setdefault("CXX", "clang++")
+    ldflags = env.get("LDFLAGS", "")
+    if "-fuse-ld=lld" not in ldflags.split():
+        env["LDFLAGS"] = f"{ldflags} -fuse-ld=lld".strip()
+    return env
 
 
 def _nuitka_command(args: argparse.Namespace) -> list[str]:
@@ -298,7 +318,7 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    return subprocess.call(command, cwd=ROOT)
+    return subprocess.call(command, cwd=ROOT, env=_build_environment(args))
 
 
 if __name__ == "__main__":

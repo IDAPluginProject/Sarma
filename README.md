@@ -235,8 +235,8 @@ Incorrect cache hits could hide changed evidence.
 
 ## Native Packages
 
-The native release workflow builds on each target OS/architecture. It does not
-cross-compile.
+Native packages are built on the matching host OS/architecture. Sarma does not
+cross-compile Nuitka artifacts.
 
 | Target | Package |
 |--------|---------|
@@ -245,8 +245,74 @@ cross-compile.
 | Linux x86_64 | `.deb`, `.pkg.tar.zst` |
 | Linux arm64 | `.deb`, `.pkg.tar.zst` |
 
+Build requirements:
+
+- all platforms: `uv` and Python 3.12+;
+- Windows: MSVC Build Tools, .NET SDK, and WiX Toolset;
+- macOS: Apple command line tools with `pkgbuild`;
+- Linux: `dpkg-deb` and `zstd`;
+- Linux arm64: `clang` and `lld` are used for the Nuitka C backend/linker.
+
+Install Windows packaging tools:
+
+```powershell
+scripts\install_windows_packaging_tools.ps1
+```
+
+Equivalent manual commands:
+
+```powershell
+winget install --id Microsoft.DotNet.SDK.8 --exact --source winget
+dotnet tool install --global wix
+```
+
 Windows uses MSVC with `--include-windows-runtime-dlls=yes`. Nuitka does not
 support `--mingw64` with Python 3.13+.
+
+Local native builds use the same scripts as CI:
+
+```bash
+# Windows PowerShell
+scripts\build_native_windows.ps1 -Arch x86_64 -Formats msi -Jobs 4
+
+# macOS
+sh scripts/build_native_macos.sh --arch arm64 --formats pkg --jobs 4
+
+# Linux
+sh scripts/build_native_linux.sh --arch x86_64 --formats deb,pkg --jobs 4
+sh scripts/build_native_linux.sh --arch arm64 --formats deb,pkg --jobs 4
+```
+
+Each wrapper runs the full release pipeline:
+
+1. compile `src`, `tests`, and `scripts`;
+2. run the focused pytest suite;
+3. build the Nuitka executable;
+4. run `sarma --help` against the built executable;
+5. package the executable into the requested native installer formats.
+
+Outputs are written to:
+
+- `dist/nuitka/<platform>-<machine>/` for Nuitka build output;
+- `dist/packages/` for final installers.
+
+For partial local runs, pass these flags through the wrapper:
+
+```bash
+--skip-tests
+--skip-build
+--skip-smoke
+--skip-package
+```
+
+The GitHub native release workflow only selects a target matrix and invokes the
+same local wrapper scripts. Manual workflow dispatch can build `all`,
+`windows-x86_64`, `macos-arm64`, `linux-x86_64`, or `linux-arm64`.
+
+Linux artifacts may be much larger than macOS artifacts because the Linux job
+currently uploads both `.deb` and `.pkg.tar.zst`, and each package contains the
+same Nuitka onefile executable payload. Use `--formats deb` or `--formats pkg`
+locally if you want to compare one Linux package at a time.
 
 ## Development
 
@@ -257,7 +323,7 @@ Useful checks:
 
 ```bash
 uv run python -m compileall -q src tests scripts
-uv run pytest tests/test_runtime_boundaries.py -q
+uv run pytest tests/test_build_nuitka.py tests/test_runtime_boundaries.py -q
 uv run sarma --help
 ```
 

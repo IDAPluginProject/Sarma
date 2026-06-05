@@ -33,7 +33,7 @@ Run checks:
 
 ```powershell
 uv run python -m compileall -q src tests scripts
-uv run pytest tests\test_runtime_boundaries.py -q
+uv run pytest tests\test_build_nuitka.py tests\test_runtime_boundaries.py -q
 uv run sarma --help
 ```
 
@@ -263,11 +263,57 @@ Common checks before publishing:
 ```powershell
 uv lock --check
 uv run python -m compileall -q src tests scripts
-uv run pytest tests\test_runtime_boundaries.py -q
+uv run pytest tests\test_build_nuitka.py tests\test_runtime_boundaries.py -q
 uv run sarma --help
 ```
 
-Nuitka scripts:
+Local native release scripts:
+
+- `scripts/build_native_release.py`
+- `scripts/build_native_windows.ps1`
+- `scripts/build_native_linux.sh`
+- `scripts/build_native_macos.sh`
+
+Run them on the matching host OS. Nuitka is not a cross-compilation pipeline.
+
+Windows x86_64:
+
+```powershell
+scripts\install_windows_packaging_tools.ps1
+scripts\build_native_windows.ps1 -Arch x86_64 -Formats msi -Jobs 4
+```
+
+macOS arm64:
+
+```bash
+sh scripts/build_native_macos.sh --arch arm64 --formats pkg --jobs 4
+```
+
+Linux x86_64:
+
+```bash
+sh scripts/build_native_linux.sh --arch x86_64 --formats deb,pkg --jobs 4
+```
+
+Linux arm64:
+
+```bash
+sh scripts/build_native_linux.sh --arch arm64 --formats deb,pkg --jobs 4
+```
+
+The wrapper scripts run the full local release pipeline:
+
+1. `compileall`;
+2. focused pytest suite;
+3. Nuitka build;
+4. `sarma --help` smoke test;
+5. native package creation.
+
+Pass `--skip-tests`, `--skip-build`, `--skip-smoke`, or `--skip-package` to
+`build_native_release.py` through the wrapper when you need a partial local
+run.
+
+Lower-level build scripts:
 
 - `scripts/build_nuitka.py`
 - `scripts/package_native.py`
@@ -279,6 +325,8 @@ Nuitka scripts:
 Native release CI:
 
 - `.github/workflows/release-native.yml`
+- CI calls the same local wrapper scripts instead of duplicating build steps in
+  YAML.
 - Windows x86_64: MSI.
 - macOS arm64: pkg.
 - Linux x86_64: deb and Arch-style pkg.tar.zst.

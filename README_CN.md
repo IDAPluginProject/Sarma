@@ -228,7 +228,7 @@ MCP 连接状态和工具结果。错误 cache 命中可能隐藏已经变化的
 
 ## 原生安装包
 
-原生 release workflow 在目标 OS/架构上原生构建，不做交叉编译。
+原生安装包必须在对应 OS/架构上本机构建。Sarma 不做 Nuitka 交叉编译。
 
 | 目标 | 安装包 |
 |------|--------|
@@ -237,8 +237,73 @@ MCP 连接状态和工具结果。错误 cache 命中可能隐藏已经变化的
 | Linux x86_64 | `.deb`, `.pkg.tar.zst` |
 | Linux arm64 | `.deb`, `.pkg.tar.zst` |
 
+构建依赖：
+
+- 所有平台：`uv` 和 Python 3.12+；
+- Windows：MSVC Build Tools、.NET SDK 和 WiX Toolset；
+- macOS：带 `pkgbuild` 的 Apple command line tools；
+- Linux：`dpkg-deb` 和 `zstd`；
+- Linux arm64：Nuitka C 后端/链接阶段使用 `clang` 和 `lld`。
+
+安装 Windows 打包工具：
+
+```powershell
+scripts\install_windows_packaging_tools.ps1
+```
+
+等价的手动命令：
+
+```powershell
+winget install --id Microsoft.DotNet.SDK.8 --exact --source winget
+dotnet tool install --global wix
+```
+
 Windows 使用 MSVC，并带 `--include-windows-runtime-dlls=yes`。Nuitka 在
 Python 3.13+ 下不支持 `--mingw64`。
+
+本地原生构建使用和 CI 相同的脚本：
+
+```bash
+# Windows PowerShell
+scripts\build_native_windows.ps1 -Arch x86_64 -Formats msi -Jobs 4
+
+# macOS
+sh scripts/build_native_macos.sh --arch arm64 --formats pkg --jobs 4
+
+# Linux
+sh scripts/build_native_linux.sh --arch x86_64 --formats deb,pkg --jobs 4
+sh scripts/build_native_linux.sh --arch arm64 --formats deb,pkg --jobs 4
+```
+
+每个 wrapper 都会执行完整 release pipeline：
+
+1. 编译检查 `src`、`tests`、`scripts`；
+2. 运行聚焦测试集；
+3. 构建 Nuitka 可执行文件；
+4. 对构建出的可执行文件运行 `sarma --help` smoke test；
+5. 按指定格式打包原生安装包。
+
+输出目录：
+
+- `dist/nuitka/<platform>-<machine>/`：Nuitka 构建输出；
+- `dist/packages/`：最终安装包。
+
+本地只想跑部分阶段时，可以把这些参数透传给 wrapper：
+
+```bash
+--skip-tests
+--skip-build
+--skip-smoke
+--skip-package
+```
+
+GitHub 原生 release workflow 只负责选择 target matrix，然后调用同一套本地
+wrapper 脚本。手动触发 workflow 时可以选择 `all`、`windows-x86_64`、
+`macos-arm64`、`linux-x86_64` 或 `linux-arm64`。
+
+Linux artifact 可能明显大于 macOS artifact，因为 Linux job 当前会同时上传
+`.deb` 和 `.pkg.tar.zst`，两个包里都会包含同一份 Nuitka onefile 可执行 payload。
+如果只想比较单个 Linux 包体积，本地可以使用 `--formats deb` 或 `--formats pkg`。
 
 ## 开发
 
@@ -249,7 +314,7 @@ Python 3.13+ 下不支持 `--mingw64`。
 
 ```bash
 uv run python -m compileall -q src tests scripts
-uv run pytest tests/test_runtime_boundaries.py -q
+uv run pytest tests/test_build_nuitka.py tests/test_runtime_boundaries.py -q
 uv run sarma --help
 ```
 
