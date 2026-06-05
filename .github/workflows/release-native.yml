@@ -73,7 +73,11 @@ jobs:
       - name: Build Nuitka binary
         shell: bash
         run: |
-          uv run --group build python scripts/build_nuitka.py --jobs 4
+          if [ "${{ matrix.os }}" = "macos" ]; then
+            uv run --group build python scripts/build_nuitka.py --jobs 4 --macos-target-arch "${{ matrix.arch }}"
+          else
+            uv run --group build python scripts/build_nuitka.py --jobs 4
+          fi
 
       - name: Smoke test binary
         shell: bash

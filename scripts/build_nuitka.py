@@ -129,7 +129,11 @@ def _platform_options(args: argparse.Namespace) -> list[str]:
         if args.mingw64:
             options.append("--mingw64")
     elif args.target_platform == "macos":
-        options.append(f"--macos-target-arch={args.macos_target_arch}")
+        macos_arch = args.macos_target_arch
+        if macos_arch == "native":
+            machine = platform.machine().lower()
+            macos_arch = "arm64" if machine in {"arm64", "aarch64"} else "x86_64"
+        options.append(f"--macos-target-arch={macos_arch}")
     elif args.target_platform == "linux":
         # Keep the binary CLI-shaped; desktop/app-bundle options are not useful
         # for Sarma's terminal UI.
@@ -256,7 +260,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--macos-target-arch",
-        choices=("native", "x86_64", "arm64", "universal"),
+        choices=("native", "x86_64", "arm64"),
         default="native",
         help="macos only: target architecture for the generated executable.",
     )
