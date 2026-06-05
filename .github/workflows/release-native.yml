@@ -1,0 +1,121 @@
+name: Build Native Installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+            formats: msi
+          - name: macos-arm64
+            runner: macos-14
+            os: macos
+            arch: arm64
+            formats: pkg
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            os: linux
+            arch: x86_64
+            formats: deb,pkg
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            formats: deb,pkg
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install WiX
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install Linux packaging tools
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf file zstd
+
+      - name: Run tests
+        shell: bash
+        run: |
+          uv run python -m compileall -q src tests scripts
+          uv run pytest tests/test_runtime_boundaries.py -q
+
+      - name: Build Nuitka binary
+        shell: bash
+        run: |
+          uv run --group build python scripts/build_nuitka.py --jobs 4
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            ./dist/nuitka/windows-amd64/sarma.exe --help
+          elif [ "${{ matrix.os }}" = "macos" ]; then
+            ./dist/nuitka/macos-${{ matrix.arch }}/sarma --help
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            ./dist/nuitka/linux-aarch64/sarma --help
+          else
+            ./dist/nuitka/linux-x86_64/sarma --help
+          fi
+
+      - name: Package native installers
+        shell: bash
+        run: |
+          uv run python scripts/package_native.py \
+            --platform "${{ matrix.os }}" \
+            --arch "${{ matrix.arch }}" \
+            --formats "${{ matrix.formats }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarma-${{ matrix.name }}
+          path: dist/packages/sarma-*
+          if-no-files-found: error
+
+  release:
+    name: Attach Native Installers To Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/sarma-*

@@ -77,11 +77,11 @@ AUDIT_SUBAGENTS: list[dict[str, Any]] = [
             "dangerous sink is not guarded by sanitization, and check that "
             "the code path is not dead.  Do a full end-to-end check so every "
             "accepted vulnerability is real, reliable, and practically valid.  "
-            "If at least one vulnerability is real and reliable, the stage can "
-            "pass with that confirmed finding.  Mark each candidate as "
-            "confirmed, rejected, or needs-more-analysis.  Clearly state "
-            "whether the current evidence is ready for deduplication or "
-            "whether more gap-filling work is required."
+            "Mark each candidate as confirmed, rejected, or "
+            "needs-more-analysis.  Do not advance weak, partial, speculative, "
+            "or single-hop evidence.  Clearly state whether the current "
+            "evidence is ready for deduplication or whether more gap-filling "
+            "work is required."
         ),
         "_tool_prefixes": [
             "decompile", "disasm", "get_basic_blocks",

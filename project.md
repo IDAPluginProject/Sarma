@@ -141,7 +141,8 @@ backends. Durable conversation history remains Sarma-owned through `Store`.
 1. Validate the resolved model provider.
 2. Connect/reuse MCP servers through `McpClientPool`.
 3. Apply skill tool allow/deny filters.
-4. Reuse a cached compiled agent when the runtime shape is unchanged.
+4. Reuse the compiled agent/graph when the runtime shape is unchanged. This is
+   an in-process construction cache, not LangChain model/tool result caching.
 5. Initialize the model via `ModelFactory`.
 6. Build one of:
    - `ruflo`: primary ReAct agent with `delegate_task`;

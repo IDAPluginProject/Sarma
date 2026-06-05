@@ -43,7 +43,6 @@ INCLUDE_PACKAGES = (
 )
 
 INCLUDE_DISTRIBUTION_METADATA = (
-    "sarma-cli",
     "langchain",
     "langchain-core",
     "langchain-openai",
@@ -90,6 +89,23 @@ def _metadata_exists(distribution_name: str) -> bool:
     return True
 
 
+def _distribution_related_modules(distribution_name: str) -> tuple[str, ...]:
+    """Return import package names provided by a distribution.
+
+    Nuitka requires included distribution metadata to have a related included
+    package. Local source distributions such as ``sarma-cli`` may not appear in
+    ``packages_distributions()``, so they must be skipped instead of passed as a
+    hyphenated package name.
+    """
+    package_map = importlib.metadata.packages_distributions()
+    related = [
+        package
+        for package, distributions in package_map.items()
+        if distribution_name in distributions
+    ]
+    return tuple(sorted(related))
+
+
 def _module_or_exit(module_name: str, install_hint: str) -> None:
     if _module_exists(module_name):
         return
@@ -108,6 +124,7 @@ def _platform_options(args: argparse.Namespace) -> list[str]:
     if args.target_platform == "windows":
         options.extend([
             "--windows-console-mode=force",
+            f"--include-windows-runtime-dlls={args.windows_runtime_dlls}",
         ])
         if args.mingw64:
             options.append("--mingw64")
@@ -152,12 +169,17 @@ def _nuitka_command(args: argparse.Namespace) -> list[str]:
 
     command.extend(_platform_options(args))
 
+    included_packages: set[str] = set()
     for package_name in INCLUDE_PACKAGES:
         if _module_exists(package_name):
             command.append(f"--include-package={package_name}")
+            included_packages.add(package_name)
 
     for distribution_name in INCLUDE_DISTRIBUTION_METADATA:
-        if _metadata_exists(distribution_name):
+        if not _metadata_exists(distribution_name):
+            continue
+        related_modules = _distribution_related_modules(distribution_name)
+        if any(module in included_packages for module in related_modules):
             command.append(f"--include-distribution-metadata={distribution_name}")
 
     if CSS_FILE.is_file():
@@ -222,6 +244,15 @@ def main() -> int:
         "--mingw64",
         action="store_true",
         help="Windows only: ask Nuitka to use MinGW64 instead of MSVC.",
+    )
+    parser.add_argument(
+        "--windows-runtime-dlls",
+        choices=("auto", "yes", "no"),
+        default="yes",
+        help=(
+            "Windows only: include Microsoft C runtime DLLs. Defaults to yes "
+            "because Nuitka auto detection can miss an installed redistributable."
+        ),
     )
     parser.add_argument(
         "--macos-target-arch",

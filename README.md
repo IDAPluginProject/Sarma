@@ -6,186 +6,180 @@
   <img src="Sarma.png" width="75%" alt="Sarma">
 </p>
 
-Sarma is a lightweight terminal agent for vulnerability auditing. It drives a
-LangGraph ReAct agent over any MCP toolset (for example [IDA-MCP](https://github.com/Captain-AI-Hub/IDA-MCP)),
-streams reasoning and tool calls live in your terminal, and ships an opt-in
-8-stage audit pipeline for structured reverse-engineering workflows.
+Sarma is a full-screen terminal agent for vulnerability auditing. It combines a
+Textual chat interface, LangGraph workflows, LangChain agents, MCP tools, and
+workspace-scoped configuration for reverse-engineering and security review.
 
-## Install
+Sarma is designed for tool-heavy audits such as IDA-MCP based binary analysis,
+but the runtime can use any configured MCP server.
 
-Requires Python 3.12+.
+## Features
+
+- Full-screen Textual TUI with chat, input bar, runtime sidebar, and workflow
+  graph.
+- `ruflo`: conversational primary agent with focused subagent delegation.
+- `audit`: full multi-stage vulnerability discovery workflow.
+- `audit-slim`: compact recon/hunter/verify/report workflow.
+- Per-workflow and per-agent model, MCP, and skill configuration.
+- MCP management and skill installation through `/plugin`.
+- Context compaction based on each model's configured context window.
+- Native release packaging: Windows MSI, macOS pkg, Linux deb, and Linux
+  Arch-style pkg.tar.zst.
+
+## Install From Source
+
+Requires Python 3.12+ and `uv`.
 
 ```bash
 git clone https://github.com/Captain-AI-Hub/Sarma.git
 cd Sarma
 uv sync
+uv run sarma
 ```
 
-This creates a local `.venv` and installs the `sarma` command. Run it with:
+One-shot mode is available after a model is configured:
+
+```bash
+uv run sarma -c "Audit the currently loaded target for command injection"
+```
+
+## First Run
+
+Start Sarma:
 
 ```bash
 uv run sarma
 ```
 
-For development you can also run the launcher directly:
+Then use the TUI input bar:
 
-```bash
-uv run python src/main.py
+```text
+/config
 ```
 
-## Quick start
+Configure at least one model. In config:
 
-```bash
-# 1. Just start the shell
-uv run sarma
+- Model name: Sarma's local alias, referenced by workflow agents.
+- Model ID: provider model id, for example `gpt-4o`, `claude-sonnet-4-5`, or an
+  OpenAI-compatible model id.
+- API mode: `openai_compatible`, `openai_responses`, or `anthropic`.
+- Max context window: accepts values such as `128000`, `200K`, or `1M`.
 
-# 2. Inside the shell, configure your model interactively (saved to ~/.sarma)
-sarma [ruflo]> /config
-
-# One-shot, non-interactive (requires a model already configured)
-uv run sarma -c "Audit the firmware in ./target.bin for command injection"
-```
-
-`/config` opens a full-screen Textual TUI for managing models and workflow
-agents. It saves `./.sarma/models.toml` and `./.sarma/agents.toml`. The change
-applies to the running session on the next turn. MCP server definitions are
-managed through `/plugin`.
+Use `/plugin` to configure MCP servers and install skills.
 
 ## Workflows
 
-Sarma runs in one of several workflows; switch at any time, effective on the next turn.
+| Workflow | Purpose |
+|----------|---------|
+| `ruflo` | Default conversational workflow with optional focused subagent delegation |
+| `audit` | Full vulnerability discovery harness |
+| `audit-slim` | Smaller four-stage audit harness |
 
-| Workflow | How to enter | What it does |
-|----------|--------------|--------------|
-| `ruflo` (default) | `uv run sarma` / `/workflow ruflo` | Conversational primary agent with focused subagent delegation |
-| `audit` | `uv run sarma workflow audit` / `/workflow audit` | Full harness: recon → hunt → validate (⇄ gapfill) → dedupe → trace → feedback (↺ hunt) → report |
-| `audit-slim` | `/workflow audit-slim` | Compact harness: recon → hunter ⇄ verify → report |
+Switch workflows with:
 
-The REPL prompt shows the active workflow: `sarma [ruflo]>`, `sarma [audit]>`, or `sarma [audit-slim]>`.
+```text
+/workflow audit
+/workflow audit-slim
+/workflow ruflo
+```
+
+Workflow changes apply on the next user turn.
 
 ### Ruflo
 
-`ruflo` is the default conversational workflow. It runs a primary ReAct agent
-that can delegate focused tasks to subagents when useful, then synthesizes the
-compact subagent results into the user-facing answer.
+`ruflo` runs a primary ReAct agent. It can call `delegate_task` to spin up
+focused subagents, then summarizes compact subagent results into the final
+answer.
 
 ```text
 user
-  ↓
-primary agent
-  ├─ optional delegate_task → focused subagent
-  ├─ optional delegate_task → focused subagent
-  └─ synthesize compact results → answer
+  -> primary agent
+      -> optional delegate_task -> focused subagent
+      -> optional delegate_task -> focused subagent
+  -> final answer
 ```
-
-Subagents in `ruflo` return compact result templates rather than full hidden
-reasoning traces, so delegation does not flood the shared context.
 
 ### Audit
 
-`audit` is the full vulnerability discovery harness. It uses eight specialist
-agents plus three router nodes:
-
-| Agent | Role |
-|-------|------|
-| `recon` | Survey binary/project architecture, metadata, entry points, imports/exports, strings, functions, and trust boundaries |
-| `hunt` | Search for dangerous sinks and vulnerability candidates |
-| `validate` | Confirm candidates are reachable, real, and not already sanitized |
-| `gapfill` | Identify coverage gaps and request more hunt or validation work |
-| `dedupe` | Merge duplicate findings and cluster related root causes |
-| `trace` | Build data/control-flow paths from external inputs to vulnerable sinks |
-| `feedback` | Review evidence quality and send weak findings back for another hunt pass |
-| `report` | Produce the final vulnerability report |
-
-The graph is not a simple line. `gapfill` is a bounded side branch off
-`validate`, and `feedback` can send weak findings back to `hunt`:
+`audit` is the full workflow:
 
 ```text
 START
-  ↓
-recon
-  ↓
-hunt
-  ↓
-validate
-  ↓
-validate_check
-  ├─ gaps / unresolved → gapfill → gapfill_check
-  │                         ├─ needs new candidates → hunt
-  │                         └─ needs re-check      → validate
-  └─ ok → dedupe
-          ↓
-        trace
-          ↓
-        feedback
-          ↓
-        feedback_check
-          ├─ weak / insufficient → hunt
-          └─ ok → report
-                    ↓
-                   END
+  -> recon
+  -> hunt
+  -> validate
+  -> validate_check
+       -> gapfill -> gapfill_check -> hunt | validate
+       -> dedupe
+  -> trace
+  -> feedback
+  -> feedback_check -> hunt | report
+  -> END
 ```
 
-Loop limits keep the harness finite: `validate`/`gapfill` can loop up to 3
-times, and `feedback` can return to `hunt` up to 2 times.
+Stages:
 
-Each audit agent receives the original user audit task plus prior
-`stage_outputs`. Agents do not receive the full token/tool trace from previous
-agents; they share structured stage results to keep context bounded.
+- `recon`: target architecture, metadata, entry points, imports/exports,
+  strings, functions, and trust boundaries.
+- `hunt`: vulnerability candidates and dangerous sinks.
+- `validate`: end-to-end validation of candidates.
+- `gapfill`: coverage gaps and targeted follow-up work.
+- `dedupe`: duplicate and root-cause consolidation.
+- `trace`: data/control-flow evidence.
+- `feedback`: evidence quality review.
+- `report`: final vulnerability report.
+
+Branch decisions are made by same-model structured router calls. Visible
+subagent output remains normal Markdown; agents do not need to emit routing JSON
+in chat.
 
 ### Audit-Slim
 
-`audit-slim` is a compact four-stage harness for faster passes:
-
-| Agent | Role |
-|-------|------|
-| `recon` | Probe the overall architecture/framework and identify weak areas |
-| `hunter` | Audit vulnerabilities in the weak areas from recon |
-| `verify` | Confirm whether hunter's findings are real and reliable |
-| `report` | Report only findings verified as reliable |
+`audit-slim` is the compact workflow:
 
 ```text
-START
-  ↓
-recon
-  ↓
-hunter
-  ↓
-verify
-  ├─ needs-hunter / weak / unsupported → hunter
-  └─ verified → report
-                  ↓
-                 END
+START -> recon -> hunter <-> verify -> report -> END
 ```
 
-`hunter` and `verify` form the feedback loop. `verify` starts its output with
-`needs-hunter` when findings are not reliable enough and gives concrete
-feedback for `hunter`; it starts with `verified` when findings are ready for
-`report`. The verify-to-hunter loop is capped at 3 iterations.
+- `recon`: maps architecture and weak areas.
+- `hunter`: audits vulnerability candidates in those areas.
+- `verify`: checks whether findings are real and reliable, and sends weak
+  findings back to `hunter`.
+- `report`: reports verified findings only.
 
-## Slash commands
+## Slash Commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | List commands |
-| `/status` | Model, MCP servers, and skills status |
-| `/graph` | Render the current workflow's execution graph |
-| `/workflow [name]` | List workflows, or switch to one |
-| `/plugin` | Manage MCP and skill plugins |
-| `/restart` | Restart the current workflow runtime |
-| `/models` | Show the configured model |
+| `/status` | Show model and MCP status |
+| `/graph` | Show the current workflow graph |
+| `/workflow [name]` | List or switch workflows |
+| `/models` | Show configured models |
 | `/history` | List past conversations |
 | `/resume <id>` | Resume a previous conversation |
-| `/config` | Open the full-screen workspace configuration TUI |
-| `/clear` | Clear the current session |
+| `/config` | Open model and workflow configuration |
+| `/plugin` | Manage MCP servers and skills |
+| `/restart` | Restart runtime resources |
 | `/compact` | Compact older context into structured memory |
+| `/clear` | Clear the current conversation |
 | `/exit` | Quit |
 
-## Configuration
+## Configuration Files
 
-Config is split across workspace TOML files. On first run in a workspace, Sarma
-creates global defaults under `~/.sarma` and copies them into `./.sarma` so each
-project can be tuned independently.
+Sarma creates global defaults under `~/.sarma` and copies missing files into the
+workspace `./.sarma`. The workspace files are the effective runtime config.
+
+```text
+./.sarma/
+  models.toml
+  agents.toml
+  mcp.toml
+  skills/
+  db.sqlite
+```
+
+`models.toml`:
 
 ```toml
 active = "default"
@@ -195,11 +189,12 @@ name = "default"
 model_name = "gpt-4o"
 api_key = ""
 base_url = ""
-api_mode = "openai_compatible"   # openai_compatible | openai_responses | anthropic
+api_mode = "openai_compatible"
 max_context_tokens = 128000
+enabled = true
 ```
 
-`./.sarma/agents.toml` assigns models, MCP servers, and skills per workflow agent:
+`agents.toml`:
 
 ```toml
 [[agents]]
@@ -211,86 +206,61 @@ skills = []
 [[agents]]
 name = "audit.recon"
 model = "default"
-mcp = ["local-http-tools"]
+mcp = ["ida-mcp"]
 skills = ["*"]
 ```
 
-Use `["*"]` to allow all configured MCP servers or all installed skills.
-`./.sarma/mcp.toml` stores MCP server definitions:
+`mcp.toml`:
 
 ```toml
 [[mcp_servers]]
-name = "local-http-tools"
-transport = "http"   # stdio | http | sse
+name = "ida-mcp"
+transport = "http" # stdio | http | sse
 url = "http://127.0.0.1:8000/mcp"
 enabled = true
 ```
 
-Set `SARMA_HOME` to relocate the global config directory (it then *is* the
-sarma dir).
+## Context And State
 
-Conversation history is per-workspace, stored in `./.sarma/db.sqlite`.
+Sarma compacts conversation context when the estimated tokens approach the
+configured model window. Older context becomes structured memory; recent context
+stays raw where possible. `/compact` triggers the same process manually.
 
-## Context Compaction
+Runtime checkpointer/store services are in-memory LangGraph helpers. Durable
+conversation history and memory artifacts are stored in `./.sarma/db.sqlite`.
 
-Sarma compacts context only when the estimated conversation tokens approach the
-configured model window (`max_context_tokens`). It preserves as much recent raw
-context as fits the budget, then converts older context into structured memory:
-goals, constraints, decisions, entities, verified facts, tool results, open
-tasks, and risks. `/compact` triggers the same process manually.
-In `/config`, the max context window accepts shorthand such as `200K` and `1M`;
-saved config stores the expanded integer token count.
+Cache is intentionally disabled. Audits depend on mutable external state such as
+the loaded binary, IDA database changes, MCP connection state, and tool results.
+Incorrect cache hits could hide changed evidence.
 
-## Plugins
+## Native Packages
 
-`/plugin` opens a full-screen Textual plugin manager for MCP servers and skill
-templates. The MCP section creates stdio, http, or sse MCP entries in
-`./.sarma/mcp.toml`; the Skills section installs a local skill directory,
-`skills.zip`, remote zip URL, or a Skillshub search result.
+The native release workflow builds on each target OS/architecture. It does not
+cross-compile.
 
-Skills are directories containing `SKILL.md`. Workspace skills live in
-`./.sarma/skills/<name>` and global skills live in `~/.sarma/skills/<name>`.
-Plugin changes are validated before install/save. Use `/restart` after manual
-config edits; changes made through `/plugin` request a runtime restart
-automatically. Assign installed skills to workflows or agents through `/config`.
+| Target | Package |
+|--------|---------|
+| Windows x86_64 | `.msi` |
+| macOS arm64 | `.pkg` |
+| Linux x86_64 | `.deb`, `.pkg.tar.zst` |
+| Linux arm64 | `.deb`, `.pkg.tar.zst` |
 
-## Terminal UI boundaries
+Windows uses MSVC with `--include-windows-runtime-dlls=yes`. Nuitka does not
+support `--mingw64` with Python 3.13+.
 
-Sarma uses three terminal UI libraries with strict boundaries:
+## Development
 
-- `prompt_toolkit`: the lightweight REPL input line (`sarma [ruflo]>`) and input
-  history only.
-- `Rich`: non-full-screen output such as tables, status panels, markdown-style
-  streaming render, and command feedback.
-- `Textual`: full-screen configuration apps. `/config` manages models and
-  agents through `src/sarma_cli/tui/`; `/plugin` manages MCP servers and skills.
+- Architecture map: [project.md](project.md)
+- Development guide: [docs/development.md](docs/development.md)
 
-## Project layout
+Useful checks:
 
-```text
-Sarma/
-├── pyproject.toml          # Package + `sarma` entry point
-├── pytest.ini              # Test config
-├── README.md / README_CN.md
-└── src/
-    ├── main.py             # Dev launcher (python src/main.py)
-    └── sarma_cli/
-        ├── __main__.py     # CLI entry: init / workflow / plugin + REPL
-        ├── app.py          # Interactive REPL loop
-        ├── session.py      # Conversation lifecycle (workflow-aware)
-        ├── config.py       # Layered global+local config loading
-        ├── paths.py        # Cross-platform path resolution
-        ├── store.py        # SQLite persistence
-        ├── renderer.py     # Live streaming output
-        ├── status.py       # Status panel
-        ├── resources/      # Plugin catalogs and skill resource loading
-        ├── engine/         # Agent runtime (LangGraph, MCP pool, audit graph, prompts)
-        ├── runtime/        # Config-to-run-plan policy resolution
-        ├── tui/            # Textual full-screen apps
-        ├── workflows/      # ruflo + audit workflow definitions
-        └── commands/       # Slash-command handlers
+```bash
+uv run python -m compileall -q src tests scripts
+uv run pytest tests/test_runtime_boundaries.py -q
+uv run sarma --help
 ```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

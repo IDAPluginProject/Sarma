@@ -270,10 +270,24 @@ uv run sarma --help
 Nuitka scripts:
 
 - `scripts/build_nuitka.py`
+- `scripts/package_native.py`
 - `scripts/build_nuitka.ps1`
 - `scripts/build_nuitka.sh`
 - `scripts/install.ps1`
 - `scripts/install.sh`
+
+Native release CI:
+
+- `.github/workflows/release-native.yml`
+- Windows x86_64: MSI.
+- macOS arm64: pkg.
+- Linux x86_64: deb and Arch-style pkg.tar.zst.
+- Linux arm64: deb and Arch-style pkg.tar.zst.
+
+Nuitka builds are native per OS/architecture. Do not treat this as a
+cross-compilation pipeline. Python 3.13 cannot use Nuitka `--mingw64`; Windows
+CI uses MSVC and includes Windows runtime DLLs through
+`--include-windows-runtime-dlls=yes`.
 
 PyPI publishing should be done through the configured CI workflow or a local
 trusted environment with a scoped PyPI token. Never commit tokens.
