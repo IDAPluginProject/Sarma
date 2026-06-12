@@ -1,0 +1,10 @@
+preload = ["@opentui/solid/preload"]
+
+[install]
+exact = false
+
+[install.cache]
+disable = false
+
+[test]
+preload = ["@opentui/solid/preload"]

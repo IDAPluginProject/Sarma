@@ -1,66 +1,49 @@
 # Sarma Project Architecture
 
-This document describes the current Sarma source tree, module boundaries, agent
-runtime, and operational safety rules.
+This document describes the current TypeScript source tree, module boundaries,
+agent runtime, and operational safety rules.
 
 ## Current Shape
 
-Sarma is a Textual-first terminal agent for vulnerability auditing. The main
+Sarma is an OpenTUI-first terminal agent for vulnerability auditing. The main
 interactive experience is a full-screen TUI with:
 
-- center chat area;
-- bottom input bar;
-- right runtime/workflow sidebar;
-- modal `/config`, `/plugin`, and `/rag` screens.
+- center chat transcript;
+- bottom input bar with shell-like prompt history;
+- right runtime sidebar;
+- modal `/config`, `/plugin`, `/rag`, `/workflow`, `/model`, and `/graph`
+  panels.
 
-The engine is LangChain/LangGraph based. Sarma resolves model, MCP, skill, and
-workflow policy before entering the engine layer; the engine receives concrete
-DTOs and does not read TOML or render UI.
+The engine is LangChain.js/LangGraph.js based. Sarma resolves model, MCP, skill,
+RAG, and workflow policy before entering the engine layer; the engine receives
+concrete DTOs and does not read TOML or render UI.
 
 ## Source Tree
 
 ```text
 Sarma/
-├── README.md / README_CN.md
-├── project.md
-├── pyproject.toml
-├── uv.lock
-├── docs/
-│   ├── development.md
-│   └── superpowers/plans/
-├── scripts/
-│   ├── build_native_release.py
-│   ├── build_native_windows.ps1
-│   ├── build_native_linux.sh
-│   ├── build_native_macos.sh
-│   ├── build_nuitka.py
-│   ├── build_nuitka.ps1
-│   ├── build_nuitka.sh
-│   ├── package_native.py
-│   ├── install_windows_packaging_tools.ps1
-│   ├── install.ps1
-│   └── install.sh
-├── tests/
-│   ├── test_build_nuitka.py
-│   └── test_runtime_boundaries.py
-└── src/
-    ├── main.py
-    └── sarma_cli/
-        ├── __main__.py
-        ├── app.py
-        ├── config.py
-        ├── paths.py
-        ├── renderer.py
-        ├── session.py
-        ├── status.py
-        ├── store.py
-        ├── context/
-        ├── commands/
-        ├── engine/
-        ├── resources/
-        ├── runtime/
-        ├── tui/
-        └── workflows/
+|-- README.md
+|-- project.md
+|-- code.md
+|-- package.json
+|-- bun.lock
+|-- tsconfig.json
+|-- bunfig.toml
+|-- tests/
+`-- src/
+    |-- index.ts
+    |-- cli/
+    |-- context/
+    |-- engine/
+    |-- resources/
+    |-- runtime/
+    |-- tui/
+    |-- workflows/
+    |-- config.ts
+    |-- paths.ts
+    |-- session.ts
+    |-- store.ts
+    `-- debug.ts
 ```
 
 ## Layer Boundaries
@@ -70,29 +53,25 @@ CLI / TUI
   -> Session
   -> RuntimePolicyResolver
   -> AgentRunner
-  -> AgentFactory / audit graphs
+  -> AgentFactory / workflow graphs
   -> LangChain / LangGraph / MCP
 ```
 
-- `__main__.py`: Click entrypoint for `sarma`, `init`, `workflow`, and
-  `plugin`.
-- `app.py`: launches `MainApp` for interactive mode and keeps a oneshot path
-  for `sarma -c`.
-- `tui/`: Textual widgets and screens. It owns presentation and user
-  interaction only.
-- `config.py` / `paths.py`: layered global/workspace config and filesystem
-  paths.
-- `store.py`: Sarma's durable SQLite store under `./.sarma/db.sqlite`.
-- `resources/`: skill discovery, RAG chunking, web search, network exchange,
-  and plugin/MCP helper logic.
-- Built-in tools such as `rag_search`, `web_search`, `http_exchange`, and
-  `packet_exchange` are added to existing agents in `AgentFactory`; they are
-  not modeled as standalone workflow agents.
+- `index.ts`: yargs entrypoint for TUI, one-shot mode, plain REPL, sessions,
+  resume, workflow, init, and RAG commands.
+- `cli/`: plain REPL, one-shot rendering, and RAG command helpers.
+- `tui/`: OpenTUI/Solid components, controller, modal panels, markdown
+  rendering, and prompt history. It owns presentation and user interaction.
+- `config.ts` / `paths.ts`: TOML parsing, layered global/workspace config, and
+  path resolution.
+- `store.ts`: durable Bun SQLite store under `./.sarma/db.sqlite`.
+- `resources/`: skill discovery, SkillHub access, RAG chunk/search, web search,
+  and network exchange tools.
 - `runtime/`: converts config/resources into concrete runtime policy and
   session-scoped LangGraph services.
 - `engine/`: LangChain/LangGraph execution, model construction, MCP pooling,
-  audit graphs, and stream translation.
-- `workflows/`: user-visible workflow metadata and sidebar graph rendering.
+  stream translation, and built agent construction.
+- `workflows/`: graph implementations and user-visible workflow metadata.
 
 Engine modules must not import TUI modules. Config modules must not build
 agents or connect MCP servers.
@@ -101,22 +80,23 @@ agents or connect MCP servers.
 
 ### Session
 
-`src/sarma_cli/session.py` owns one live runtime:
+`src/session.ts` owns one live runtime:
 
-- `Store`: durable Sarma conversation/history database.
+- `Store`: durable workspace session database.
 - `McpClientPool`: MCP connection lifecycle.
 - `ModelFactory`: model client construction.
 - `AgentRuntimeServices`: LangGraph in-memory checkpointer/store services.
 - `AgentFactory`: compiled agent/graph builder.
 - conversation id, message history, and workflow graph progress.
 
-`Session.run_turn()` resolves the current workflow, compacts context if needed,
-persists the user message, creates an `AgentRunner`, streams events, and stores
-the assistant response.
+`Session.runTurn()` resolves the current workflow, connects MCP, compacts
+context if needed, persists the user message, creates an `AgentRunner`, streams
+events, updates graph progress, stores tool executions, and persists the final
+assistant response.
 
 ### Runtime Policy
 
-`runtime/resolver.py` is the config-to-run-plan boundary. It resolves:
+`runtime/resolver.ts` is the config-to-run-plan boundary. It resolves:
 
 - active workflow model;
 - enabled MCP servers;
@@ -124,73 +104,68 @@ the assistant response.
 - workflow skills;
 - per-subagent model assignments;
 - per-subagent MCP allowlists;
-- per-subagent skills.
+- per-subagent skills;
+- RAG settings and enabled knowledge bases.
 
 Wildcard `["*"]` expansion belongs here, not in the engine.
 
 ### Runtime Services
 
-`runtime/services.py` defines `AgentRuntimeServices`.
+`runtime/services.ts` defines `AgentRuntimeServices`.
 
 Current services:
 
-- `InMemorySaver` checkpointer;
-- `InMemoryStore`;
-- optional cache field, currently disabled;
-- optional transformers tuple, currently empty.
+- LangGraph `MemorySaver` checkpointer;
+- LangGraph in-memory store;
+- optional cache field, intentionally disabled.
 
-The installed LangGraph package only provides in-memory checkpoint/store
-backends. Durable conversation history remains Sarma-owned through `Store`.
-
-`AgentRunner` passes the Sarma conversation id as LangGraph
-`configurable.thread_id` so the checkpointer has a stable session namespace.
+Durable sessions remain Sarma-owned through `Store`. Runtime services are
+recreated on `/restart`.
 
 ### AgentFactory
 
-`engine/agent_factory.py` builds the executable runtime shape:
+`engine/agentFactory.ts` builds the executable runtime shape:
 
 1. Validate the resolved model provider.
 2. Connect/reuse MCP servers through `McpClientPool`.
-3. Apply skill tool allow/deny filters.
-4. Reuse the compiled agent/graph when the runtime shape is unchanged. This is
-   an in-process construction cache, not LangChain model/tool result caching.
-5. Initialize the model via `ModelFactory`.
-6. Build one of:
+3. Apply skill tool allow/deny filters to MCP tools.
+4. Append built-in local tools.
+5. Reuse the compiled agent/graph when the runtime shape is unchanged. This is
+   an in-process construction cache, not model/tool result caching.
+6. Initialize the model via `ModelFactory`.
+7. Build one of:
    - `ruflo`: primary ReAct agent with `delegate_task`;
    - `audit`: full StateGraph;
    - `audit-slim`: compact StateGraph;
    - fallback/test ReAct agent.
 
-Runtime services are passed into `create_agent(...)` for ReAct agents and into
+Runtime services are passed into `createAgent(...)` for ReAct agents and into
 `StateGraph.compile(...)` for audit graphs.
 
 ### ModelFactory
 
-`engine/model_factory.py` owns model construction and provider quirks:
+`engine/modelFactory.ts` owns model construction and provider quirks:
 
 - `openai_compatible`;
 - `openai_responses`;
 - `anthropic`;
-- OpenAI-compatible `reasoning_content` preservation.
+- OpenAI-compatible reasoning content preservation where available.
 
-Sampling is intentionally fixed by config policy: temperature is `0`, top-p is
-not user-configured.
+Sampling is config-driven. The generated default uses temperature `0.0` and
+top-p `1.0`.
 
 ### Middleware
 
-`runtime/middleware.py` builds the default agent middleware stack:
+`runtime/middleware.ts` builds the default agent middleware stack. The
+TypeScript port provides local equivalents for the pieces Sarma needs:
 
-- `TodoListMiddleware`;
-- `FilesystemFileSearchMiddleware` rooted at `Path.cwd()`;
-- DeepAgents `FilesystemMiddleware` rooted at `Path.cwd()`;
-- `ShellToolMiddleware` rooted at `Path.cwd()`;
-- `ModelRetryMiddleware(max_retries=2)`;
-- `ToolRetryMiddleware(max_retries=2)`;
-- model-dependent summarization helpers;
-- `RubricMiddleware`.
+- todo/list style agent helpers where supported;
+- file search and filesystem-oriented tools rooted at `process.cwd()`;
+- shell/network/retry/rubric behavior where locally implemented;
+- model-dependent context and compaction helpers.
 
-No model/tool call limit middleware is enabled. Audit workflows can require many
-IDA/MCP calls, and hard caps belong in a future policy layer.
+Do not add hard model/tool call caps to audit workflows without an explicit
+policy layer. Audit may require many legitimate MCP calls.
 
 ## Workflows
 
@@ -205,8 +180,8 @@ user
   -> synthesized answer
 ```
 
-Delegated subagents return compact result templates. Their full hidden traces
-are not replayed into the shared context.
+`delegate_task` creates temporary focused subagents and returns compact results.
+Several delegate calls emitted in one tool step may execute in parallel.
 
 ### Audit
 
@@ -246,11 +221,27 @@ Compact graph:
 ```text
 START -> recon -> hunter -> verify -> report -> END
                        ^       |
-                       └───────┘
+                       +-------+
 ```
 
 `verify` sends weak or unsupported findings back to `hunter`; verified findings
-advance to `report`.
+advance to `report`. The feedback loop is bounded.
+
+## Stage Message Passing
+
+Audit stage message passing is explicit LangGraph state, not hidden chat trace
+replay and not JSON.
+
+Each stage:
+
+1. receives a `HumanMessage` built from the user task and prior
+   `stage_outputs`;
+2. runs a stage-specific `createAgent`;
+3. stores the final assistant message as `stage_outputs[stageName]`;
+4. returns the merged state to the graph.
+
+The next stage receives prior outputs as Markdown sections. The TypeScript port
+packs those outputs by token budget rather than a fixed character limit.
 
 ## Structured Routing
 
@@ -259,8 +250,12 @@ Audit branch decisions use same-model structured router calls.
 The visible subagent output stays normal Markdown. Router nodes call a small
 router agent with:
 
-```python
-create_agent(model, [], response_format=RouteDecision)
+```ts
+createAgent({
+  model,
+  tools: [],
+  responseFormat: RouteDecision,
+})
 ```
 
 Routes covered:
@@ -270,116 +265,109 @@ Routes covered:
 - `feedback -> hunt | report`;
 - `verify -> hunter | report`.
 
-`ROUTE_JSON` is no longer required in visible subagent prompts. `_route_next()`
-remains as a legacy fallback if structured output fails.
+`route_json` is not required in visible subagent prompts. `routeNext()` remains
+as a fallback if structured output fails.
 
-## Why Cache Is Disabled
-
-Sarma deliberately wires a cache field but does not enable it yet.
-
-Reasons:
-
-- IDA/MCP state is mutable. The same prompt can produce different correct
-  results after the user loads a new binary, renames functions, patches bytes,
-  changes comments, or reconnects a server.
-- Tool results depend on external process state, not just prompt text.
-- Audit routing must see fresh stage outputs and current MCP observations.
-- A generic LangGraph/LangChain cache key does not currently include target
-  binary identity, IDB hash, loaded segment state, MCP server state, or tool
-  side effects.
-- Incorrect cache hits in vulnerability auditing are worse than slower runs:
-  they can hide changed evidence or skip necessary tool calls.
-
-Cache can be enabled later only after Sarma defines a target-aware cache policy,
-for example:
-
-- target binary hash / IDB metadata;
-- MCP server identity and connection mode;
-- relevant tool arguments;
-- IDA database mutation/version marker;
-- workflow and agent name;
-- model id and prompt version.
-
-Until then, retries improve reliability without risking stale audit evidence.
-
-## Streaming and UI
+## Streaming And UI
 
 `AgentRunner` streams LangGraph chunks with:
 
-- `stream_mode=["messages", "updates", "custom"]`;
-- `subgraphs=True`;
-- `version="v2"`;
-- `thread_id = conversation_id`.
+- `streamMode: ["messages", "updates", "custom"]`;
+- `subgraphs: true`;
+- stable `threadId = conversationId`.
 
-`engine/streaming.py` translates LangGraph chunks into `StreamEvent`s. The TUI
-uses these events to update:
+`engine/streaming.ts` translates LangGraph chunks into Sarma `StreamEvent`s.
+The TUI controller uses these events to update:
 
 - chat Markdown;
-- collapsed tool call widgets;
-- skill trigger lines;
-- sidebar MCP status;
-- active workflow graph;
-- active/completed subagents.
+- collapsed tool call rows;
+- subagent lifecycle rows;
+- MCP connection status;
+- workflow stage status;
+- workflow graph state.
 
-Transient UI status uses Textual `App.notify`; user-requested command output
-such as `/status`, `/models`, `/history`, and `/graph` remains in chat so it can
-be copied.
+For audit subagents in LangGraph.js, `makeSubagentNode()` invokes the inner
+agent with the outer node `config`. That is what preserves nested subgraph
+namespaces so streaming tokens and tool calls can be attributed to the correct
+stage.
 
 ## Persistence
 
 Sarma persistence is explicit:
 
-- `~/.sarma/models.toml` and `~/.sarma/agents.toml`: global model and workflow
-  policy config.
-- `mcp.toml`: additive global/workspace MCP definitions. Workspace definitions
-  override only same-name global entries.
-- `rag.toml`: global RAG embedding model settings plus additive
-  global/workspace knowledge base registrations.
-- `rag/docs/`: default workspace source document directories for RAG knowledge
-  bases; individual KBs can override this path in `rag.toml`.
-- `rag/chroma/`: default local Chroma persistent databases; individual KBs can
-  point to an existing Chroma database path in `rag.toml`.
-- `~/.sarma/rag/models/`: default HuggingFace embedding model cache for RAG.
+- `~/.sarma/models.toml`: global model provider config.
+- `~/.sarma/agents.toml`: global workflow/subagent policy.
+- `mcp.toml`: additive global/workspace MCP definitions.
+- `rag.toml`: global RAG settings plus additive knowledge base registrations.
 - `skills/`: installed workspace/global skills.
-- `db.sqlite`: conversations, messages, memory artifacts, tool records.
+- `./.sarma/.history`: prompt input history for the full-screen TUI.
+- `./.sarma/db.sqlite`: sessions, messages, memory artifacts, and tool records.
 
-LangGraph in-memory services are runtime helpers only. They are recreated on
-`/restart` and are not treated as durable memory.
+The DB schema currently stores:
+
+- `conversations`;
+- `messages`;
+- `tool_executions`;
+- `memory_artifacts`.
+
+## RAG
+
+The TypeScript port preserves the user-facing RAG contract but uses a Bun
+SQLite-backed local chunk database. Local HuggingFace model pulling is not
+supported here. API embeddings are supported through an OpenAI-compatible
+embedding endpoint; otherwise search falls back to lexical scoring.
+
+RAG is mounted as a built-in `rag_search` tool on existing agents. It is not a
+separate workflow agent.
+
+## Why Result Cache Is Disabled
+
+Sarma deliberately does not enable model/tool result caching.
+
+Reasons:
+
+- IDA/MCP state is mutable.
+- Tool results depend on external process state.
+- Audit routing must see fresh stage outputs.
+- Generic cache keys do not include target binary identity, IDB state, MCP
+  server state, or tool side effects.
+- Incorrect cache hits in vulnerability auditing can hide changed evidence.
+
+The in-process agent construction cache is separate and only avoids rebuilding
+identical runtime shapes.
 
 ## Test Map
 
-Current tests live in `tests/test_runtime_boundaries.py`.
+Tests live under `tests/`.
 
 They cover:
 
-- agent cache reuse;
-- audit routing and graph structure;
-- structured router helper behavior;
-- MCP filtering and status summaries;
-- middleware stack and no call-limit middleware;
-- runtime services;
+- CLI and TUI command behavior;
+- model/config parsing;
+- MCP pooling and runtime policy;
+- audit graph routing and prompt constraints;
+- streaming translation and subagent attribution;
+- Ruflo delegate lifecycle;
 - context compaction;
-- config/plugin/RAG TUI behavior;
-- main TUI command/event behavior;
-- sidebar workflow graph rendering;
-- store migration and update boundaries.
+- RAG chunk/search behavior;
+- plugin and SkillHub behavior;
+- session persistence and resume.
 
 Run:
 
-```powershell
-uv run python -m compileall -q src tests scripts
-uv run pytest tests\test_build_nuitka.py tests\test_runtime_boundaries.py -q
-uv run sarma --help
+```bash
+bun run typecheck
+bun test
 ```
 
 ## Extension Rules
 
-- Add config policy in `runtime/resolver.py`, not in `Session` or
+- Add config policy in `runtime/resolver.ts`, not in `Session` or
   `AgentFactory`.
-- Add model construction in `engine/model_factory.py`.
-- Add agent execution in `engine/`.
-- Add workflow metadata and sidebar graph rendering in `workflows/`.
+- Add model construction in `engine/modelFactory.ts`.
+- Add agent execution behavior in `engine/`.
+- Add workflow graph logic in `workflows/`.
 - Add presentation-only logic in `tui/`.
-- Keep `renderer.py` for oneshot/non-full-screen output.
+- Keep one-shot/plain output in `cli/`.
 - Never make tool filtering fail open.
-- Do not enable cache until target-aware cache keys exist.
+- Do not enable result cache until target-aware cache keys exist.
