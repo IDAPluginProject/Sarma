@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, afterEach } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -10,6 +10,25 @@ import { App, isCtrlCKey, tuiHelpText } from "@/tui/app";
 import type { Controller } from "@/tui/controller";
 import type { TranscriptItem } from "@/tui/transcript";
 import type { GraphStageView } from "@/tui/controller";
+
+type TuiRenderSetup = Awaited<ReturnType<typeof testRender>>;
+
+const activeRenderers = new Set<TuiRenderSetup["renderer"]>();
+
+async function renderTui(...args: Parameters<typeof testRender>): Promise<TuiRenderSetup> {
+  const setup = await testRender(...args);
+  activeRenderers.add(setup.renderer);
+  return setup;
+}
+
+afterEach(() => {
+  for (const renderer of activeRenderers) {
+    if (!renderer.isDestroyed) {
+      renderer.destroy();
+    }
+  }
+  activeRenderers.clear();
+});
 
 function mockController(over: Partial<Controller> = {}): Controller {
   const [items] = createStore<TranscriptItem[]>(
@@ -348,7 +367,7 @@ describe("TUI App", () => {
 
   test("exits only after two Ctrl+C presses", async () => {
     let exits = 0;
-    const t = await testRender(() => App({ controller: mockController(), onExit: () => exits++ }), {
+    const t = await renderTui(() => App({ controller: mockController(), onExit: () => exits++ }), {
       width: 84,
       height: 22,
     });
@@ -364,7 +383,7 @@ describe("TUI App", () => {
   });
 
   test("renders chat, input and status sidebar", async () => {
-    const t = await testRender(() => App({ controller: mockController(), onExit: () => {} }), {
+    const t = await renderTui(() => App({ controller: mockController(), onExit: () => {} }), {
       width: 100,
       height: 30,
     });
@@ -411,7 +430,7 @@ describe("TUI App", () => {
   });
 
   test("renders workflow stage cards in the transcript", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -444,7 +463,7 @@ describe("TUI App", () => {
   });
 
   test("renders workflow router cards in the transcript", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -478,7 +497,7 @@ describe("TUI App", () => {
   });
 
   test("renders delegate_task dispatch and opens subagent details fullscreen", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -545,7 +564,7 @@ describe("TUI App", () => {
   });
 
   test("renders delegate subagent reasoning in the merged card preview", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -597,7 +616,7 @@ describe("TUI App", () => {
   });
 
   test("renders subagent-owned tools inside subagent details", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -654,7 +673,7 @@ describe("TUI App", () => {
 
   test("refreshes MCP status when the TUI mounts", async () => {
     let refreshes = 0;
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({ refreshMcpStatus: async () => { refreshes += 1; } }),
@@ -667,7 +686,7 @@ describe("TUI App", () => {
   });
 
   test("renders idle status when not busy", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () => App({ controller: mockController({ busy: () => false, items: [] }), onExit: () => {} }),
       { width: 84, height: 16 },
     );
@@ -677,7 +696,7 @@ describe("TUI App", () => {
   });
 
   test("renders chat messages through markdown instead of raw markdown text", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -708,7 +727,7 @@ describe("TUI App", () => {
 
   test("clicking the terminal keeps typing routed to the input", async () => {
     let submitted = "";
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -737,7 +756,7 @@ describe("TUI App", () => {
     await withTempWorkspace(async (workspace) => {
       let submitted = "";
       const notes: string[] = [];
-      const t = await testRender(
+      const t = await renderTui(
         () =>
           App({
             controller: mockController({
@@ -775,7 +794,7 @@ describe("TUI App", () => {
       writeFileSync(join(sarmaDir, ".history"), "first prompt\nsecond prompt\n", "utf8");
 
       const submitted: string[] = [];
-      const t = await testRender(
+      const t = await renderTui(
         () =>
           App({
             controller: mockController({
@@ -818,7 +837,7 @@ describe("TUI App", () => {
 
   test("routes model, MCP, skills, and sessions slash commands", async () => {
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -858,7 +877,7 @@ describe("TUI App", () => {
   test("/model without an argument opens the model picker", async () => {
     let opened = false;
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -886,7 +905,7 @@ describe("TUI App", () => {
   test("/workflow without an argument opens the workflow picker", async () => {
     let opened = false;
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -914,7 +933,7 @@ describe("TUI App", () => {
   test("/graph without an argument opens the graph panel", async () => {
     let opened = false;
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -942,7 +961,7 @@ describe("TUI App", () => {
   test("/plugin without arguments opens the plugin panel", async () => {
     let opened = false;
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -970,7 +989,7 @@ describe("TUI App", () => {
   test("/rag without arguments opens the RAG panel", async () => {
     let opened = false;
     const notes: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -996,7 +1015,7 @@ describe("TUI App", () => {
   });
 
   test("renders RAG panel with knowledge bases", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1028,7 +1047,7 @@ describe("TUI App", () => {
   });
 
   test("renders workflow picker with workflow rows", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1051,7 +1070,7 @@ describe("TUI App", () => {
   });
 
   test("renders graph panel with workflow hierarchy", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1077,7 +1096,7 @@ describe("TUI App", () => {
   });
 
   test("renders plugin panel for MCP and skills", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1127,7 +1146,7 @@ describe("TUI App", () => {
       scope: "local",
     });
     const transportChanges: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1182,7 +1201,7 @@ describe("TUI App", () => {
       enabled: "true",
       scope: "local",
     });
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1219,7 +1238,7 @@ describe("TUI App", () => {
 
   test("plugin MCP form exposes a Ctrl-T MCP test action", async () => {
     let tested = false;
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1248,7 +1267,7 @@ describe("TUI App", () => {
   });
 
   test("renders model picker as a TUI selection window", async () => {
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1299,7 +1318,7 @@ describe("TUI App", () => {
       enabled: "true",
     });
     const apiModeChanges: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1345,7 +1364,7 @@ describe("TUI App", () => {
       skills: "",
     });
     const modelChanges: string[] = [];
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1402,7 +1421,7 @@ describe("TUI App", () => {
 
   test("config model form exposes a Ctrl-T model test action", async () => {
     let tested = false;
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
@@ -1432,7 +1451,7 @@ describe("TUI App", () => {
 
   test("drag-selecting transcript text copies it through OSC52", async () => {
     let copied = "";
-    const t = await testRender(
+    const t = await renderTui(
       () =>
         App({
           controller: mockController({
