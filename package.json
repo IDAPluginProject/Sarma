@@ -1,6 +1,6 @@
 {
   "name": "sarma-seek",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Sarma — lightweight vulnerability audit agent (TypeScript / LangChain.js port)",
   "license": "MIT",
   "type": "module",
