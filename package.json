@@ -8,6 +8,25 @@
   "bin": {
     "sarma": "src/index.ts"
   },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "bunfig.toml",
+    "tsconfig.json",
+    "Sarma.png"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Captain-AI-Hub/Sarma.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Captain-AI-Hub/Sarma/issues"
+  },
+  "homepage": "https://github.com/Captain-AI-Hub/Sarma#readme",
   "scripts": {
     "sarma": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
