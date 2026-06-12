@@ -1,68 +1,85 @@
 # Sarma
 
-**English** | **[中文](README_CN.md)**
-
 <p align="center">
   <img src="Sarma.png" width="75%" alt="Sarma">
 </p>
 
-Sarma is a full-screen terminal agent for vulnerability auditing. It combines a
-Textual chat interface, LangGraph workflows, LangChain agents, MCP tools, and
-layered global/workspace configuration for reverse-engineering and security
-review.
+Sarma is a terminal agent for vulnerability auditing. This repository is the
+TypeScript/Bun implementation of Sarma, built on LangChain.js, LangGraph.js,
+OpenTUI/Solid, MCP tools, and layered global/workspace configuration.
 
-Sarma is designed for tool-heavy audits such as IDA-MCP based binary analysis,
-but the runtime can use any configured MCP server.
+Sarma is designed for tool-heavy security work such as IDA-MCP based binary
+analysis, source review, and network probing, but it can use any configured MCP
+server.
 
 ## Features
 
-- Full-screen Textual TUI with chat, input bar, runtime sidebar, and workflow
-  graph.
-- `ruflo`: conversational primary agent with focused subagent delegation.
+- Full-screen OpenTUI interface with chat, input history, runtime sidebar,
+  MCP connection status, workflow stages, and modal panels.
+- `ruflo`: conversational primary ReAct agent with optional parallel
+  `delegate_task` focused subagents.
 - `audit`: full multi-stage vulnerability discovery workflow.
 - `audit-slim`: compact recon/hunter/verify/report workflow.
-- Per-workflow and per-agent model, MCP, and skill configuration.
-- MCP management and skill installation through `/plugin`.
-- RAG support through `/rag` for global embedding model settings and
-  `sarma rag` for local Chroma knowledge base registration/chunking.
-- Built-in `web_search`, `http_exchange`, and `packet_exchange` tools for
-  public research and HTTP/HTTPS or raw port testing.
-- Context compaction based on each model's configured context window.
-- Native release packaging: Windows MSI, macOS pkg, Linux deb, and Linux
-  Arch-style pkg.tar.zst.
+- Per-workflow and per-subagent model, MCP, and skill configuration.
+- `/config` model/workflow configuration TUI.
+- `/plugin` MCP and skill configuration TUI, with local/global install scope.
+- SkillHub search/install support from `https://www.skillhub.club` by default.
+- `/rag` RAG configuration TUI and `sarma rag` CLI for local knowledge bases.
+- Built-in `rag_search`, `web_search`, `http_exchange`, and `packet_exchange`
+  tools mounted on existing agents.
+- Context compaction based on each model profile's configured context window.
+- Workspace session database with `sarma sessions` and `sarma resume <id>`.
 
 ## Install From Source
 
-Requires Python 3.12+ and `uv`.
+Requires Bun.
 
 ```bash
 git clone https://github.com/Captain-AI-Hub/Sarma.git
 cd Sarma
-uv sync
-uv run sarma
+bun install
+bun run sarma
 ```
 
 One-shot mode is available after a model is configured:
 
 ```bash
-uv run sarma -c "Audit the currently loaded target for command injection"
+bun run sarma -c "Audit the currently loaded target for command injection"
+```
+
+Use a specific workflow:
+
+```bash
+bun run sarma -c "Audit this target" --workflow audit-slim
+```
+
+Use the plain line-based REPL instead of the full-screen TUI:
+
+```bash
+bun run sarma --plain
 ```
 
 ## First Run
 
-Start Sarma:
+Initialize config files:
 
 ```bash
-uv run sarma
+bun run sarma init
 ```
 
-Then use the TUI input bar:
+Start the TUI:
+
+```bash
+bun run sarma
+```
+
+Then open model configuration:
 
 ```text
 /config
 ```
 
-Configure at least one model. In config:
+Configure at least one model profile:
 
 - Model name: Sarma's local alias, referenced by workflow agents.
 - Model ID: provider model id, for example `gpt-4o`, `claude-sonnet-4-5`, or an
@@ -70,12 +87,13 @@ Configure at least one model. In config:
 - API mode: `openai_compatible`, `openai_responses`, or `anthropic`.
 - Max context window: accepts values such as `128000`, `200K`, or `1M`.
 
-Use `/plugin` to configure MCP servers and install skills.
+Use `/plugin` to configure MCP servers and install skills. Use `/rag` to
+configure RAG model settings and knowledge bases.
 
 ## Workflows
 
 | Workflow | Purpose |
-|----------|---------|
+| --- | --- |
 | `ruflo` | Default conversational workflow with optional focused subagent delegation |
 | `audit` | Full vulnerability discovery harness |
 | `audit-slim` | Smaller four-stage audit harness |
@@ -83,18 +101,21 @@ Use `/plugin` to configure MCP servers and install skills.
 Switch workflows with:
 
 ```text
+/workflow
 /workflow audit
 /workflow audit-slim
 /workflow ruflo
 ```
 
-Workflow changes apply on the next user turn.
+`/workflow` with no argument opens the workflow picker. Workflow changes apply
+on the next user turn.
 
 ### Ruflo
 
 `ruflo` runs a primary ReAct agent. It can call `delegate_task` to spin up
 focused subagents, then summarizes compact subagent results into the final
-answer.
+answer. Multiple `delegate_task` calls from the same tool step can run in
+parallel.
 
 ```text
 user
@@ -155,27 +176,53 @@ START -> recon -> hunter <-> verify -> report -> END
 ## Slash Commands
 
 | Command | Description |
-|---------|-------------|
-| `/help` | List commands |
-| `/status` | Show model and MCP status |
-| `/graph` | Show the current workflow graph |
-| `/workflow [name]` | List or switch workflows |
-| `/models` | Show configured models |
-| `/history` | List past conversations |
-| `/resume <id>` | Resume a previous conversation |
-| `/config` | Open model and workflow configuration |
-| `/plugin` | Manage MCP servers and skills |
-| `/rag` | Configure the global RAG embedding model and inspect knowledge bases |
-| `/restart` | Restart runtime resources |
-| `/compact` | Compact older context into structured memory |
-| `/clear` | Clear the current conversation |
-| `/exit` | Quit |
+| --- | --- |
+| `/help` | Show command help |
+| `/status` | Show combined runtime status |
+| `/model [name]` | List or select active model |
+| `/config` | Configure model providers and workflow agents |
+| `/mcp` | Show MCP status |
+| `/skills` | Show skill status |
+| `/graph` | Open current workflow graph view |
+| `/graph status` | Print a copyable workflow graph report |
+| `/workflow [name]` | Open picker or switch workflow |
+| `/models` | Show configured models and assignments |
+| `/sessions` | List saved sessions |
+| `/resume <id>` | Resume a saved session |
+| `/plugin` | Configure MCP servers and skills |
+| `/rag` | Configure RAG settings and knowledge bases |
+| `/debug [on|off]` | Enable debug console/file logging |
+| `/restart` | Restart workflow runtime resources |
+| `/compact` | Compact conversation context |
+| `/clear` | Clear current session history |
+| `/exit` | Leave the TUI |
+
+The full-screen TUI stores prompt history in `./.sarma/.history`; Up/Down browse
+previous prompts like a shell history file.
+
+## Sessions
+
+Sarma stores workspace sessions in `./.sarma/db.sqlite`.
+
+List sessions:
+
+```bash
+bun run sarma sessions
+```
+
+Resume a session:
+
+```bash
+bun run sarma resume <session-id>
+```
+
+On exit, the plain REPL prints the current session id and resume command. The
+full-screen TUI also uses the same workspace store.
 
 ## Configuration Files
 
 Sarma creates global defaults under `~/.sarma`. Workspace files under
-`./.sarma` are additive overlays for local resources; they are not copies of
-global config.
+`./.sarma` are additive overlays for local resources.
 
 Global config:
 
@@ -196,28 +243,23 @@ Workspace config and data:
 ./.sarma/
   mcp.toml
   rag.toml
+  .history
+  db.sqlite
   rag/
     docs/
     chroma/
   skills/
-  db.sqlite
 ```
 
 Runtime merging rules:
 
-- `models.toml` and `agents.toml` are global and are edited by `/config`.
+- `models.toml` and `agents.toml` are global model/workflow policy files.
 - MCP servers are `global + workspace`; a workspace server with the same name
-  overrides the global entry, but other global MCP servers remain available.
+  overrides the global entry.
 - Skills are directory resources under `skills/<name>/SKILL.md`; workspace
   skills take precedence over global skills with the same name.
-- RAG embedding model settings are global and are edited by `/rag` or
-  `sarma rag --model ...`.
-- RAG knowledge bases are `global + workspace`, defaulting to workspace-local
-  Chroma databases under `./.sarma/rag/chroma/<knowledge-base>/`.
-
-`/plugin` lets MCP servers and skill installs choose `workspace` or `global`
-scope. `sarma rag --global` registers a knowledge base in global `rag.toml`;
-without `--global`, it registers only in the current workspace.
+- RAG embedding model settings are global; knowledge bases are `global +
+  workspace`.
 
 `models.toml`:
 
@@ -230,6 +272,8 @@ model_name = "gpt-4o"
 api_key = ""
 base_url = ""
 api_mode = "openai_compatible"
+temperature = 0.0
+top_p = 1.0
 max_context_tokens = 128000
 enabled = true
 ```
@@ -263,7 +307,7 @@ enabled = true
 `rag.toml`:
 
 ```toml
-embedding_backend = "huggingface" # huggingface | api
+embedding_backend = "api" # huggingface | api
 embedding_model = "text-embedding-3-large"
 embedding_api_base = ""
 embedding_api_key = ""
@@ -273,176 +317,95 @@ chunk_overlap = 150
 
 [[knowledge_bases]]
 name = "project-docs"
+backend = "sarma_native" # sarma_native | chroma_http
 docs_path = ""
 chroma_path = ""
 enabled = true
 ```
 
-Use `/rag` to configure the global embedding backend/model, pull HuggingFace
-models into the global model cache, and inspect registered knowledge bases.
-Use the `sarma rag` CLI to register, split, and import knowledge bases.
+## Plugins And Skills
 
-Embedding backends:
+Use `/plugin` to manage both MCP servers and skills. New MCP and skill entries
+can be saved to workspace scope or global scope.
 
-- `huggingface`: uses `langchain-huggingface` and can pull/cache the model under
-  `~/.sarma/rag/models/<model>/` or `embedding_local_path`.
-- `api`: uses an OpenAI-compatible embeddings API through `embedding_api_base`
-  and `embedding_api_key`.
-
-If `docs_path` or `chroma_path` is empty, Sarma uses:
-
-- source documents: `./.sarma/rag/docs/<knowledge-base>/`;
-- Chroma database: `./.sarma/rag/chroma/<knowledge-base>/`.
-
-The RAG embedding model is independent from chat models in `models.toml`; the
-primary agent model is not used for document chunking or future vectorization.
-
-The same behavior is available from the CLI:
-
-```bash
-sarma rag --backend huggingface --model BAAI/bge-small-en-v1.5 --pull
-sarma rag --backend api --model text-embedding-3-large --api-base https://api.example/v1
-sarma rag --name project-docs --split ./docs
-sarma rag --name project-docs --split ./docs --chroma-path ./.sarma/rag/chroma/project-docs
-sarma rag --name imported-kb --add ./.sarma/rag/chroma/imported-kb
-sarma rag --global --name shared-kb --add /absolute/path/to/chroma
-```
-
-`--add` registers an existing Chroma persistent directory only. The directory
-must contain Chroma's `chroma.sqlite3` file, for example:
+Skills can be added manually by placing a `SKILL.md` file under:
 
 ```text
-./.sarma/rag/chroma/project-docs/
-  chroma.sqlite3
-  <Chroma segment/index files>
+./.sarma/skills/<name>/SKILL.md
+~/.sarma/skills/<name>/SKILL.md
+```
+
+They are discovered by name and can be enabled per workflow agent through
+`agents.toml` or the plugin/config TUI.
+
+SkillHub search and install uses `https://www.skillhub.club` by default. Override
+with:
+
+```bash
+SARMA_SKILLSHUB_URL=https://example.com bun run sarma
+```
+
+## RAG
+
+The TypeScript port stores local chunks in a Bun SQLite-backed database inside a
+Chroma-style directory containing `chroma.sqlite3`. API embeddings are supported
+through an OpenAI-compatible embedding endpoint. Local HuggingFace model pulling
+is not supported in this TypeScript port; with no embedding model configured,
+search falls back to lexical scoring.
+
+CLI examples:
+
+```bash
+bun run sarma rag --backend api --model text-embedding-3-large --api-base https://api.example/v1
+bun run sarma rag --name project-docs --split ./docs
+bun run sarma rag --name imported-kb --add ./.sarma/rag/chroma/imported-kb
+bun run sarma rag --global --name shared-kb --add /absolute/path/to/chroma
 ```
 
 When at least one knowledge base is enabled, Sarma attaches a built-in
-`rag_search` tool to the existing workflow agents. RAG is not a separate agent;
-agents call `rag_search` when they need private knowledge.
+`rag_search` tool to the existing workflow agents. RAG is not a separate agent.
 
 ## Built-In Agent Tools
 
-Sarma mounts local built-in tools on the existing workflow agents:
-
 | Tool | Purpose |
-|------|---------|
-| `rag_search` | Search enabled local RAG knowledge bases |
+| --- | --- |
+| `rag_search` | Search enabled RAG knowledge bases |
 | `web_search` | Search the public web for compact titles, URLs, and snippets |
 | `http_exchange` | Send HTTP/HTTPS requests to a target host, port, path, and method |
 | `packet_exchange` | Send raw TCP, UDP, or TLS payloads and capture the response |
 
-`http_exchange` is the preferred tool for HTTP/HTTPS service checks. Use
-`packet_exchange` when the agent needs a lower-level payload, a non-HTTP
-protocol, or a deliberately malformed request.
+`http_exchange` is the preferred tool for HTTP/HTTPS checks. Use
+`packet_exchange` for lower-level or non-HTTP protocol probes.
 
 ## Context And State
 
-Sarma compacts conversation context when the estimated tokens approach the
-configured model window. Older context becomes structured memory; recent context
-stays raw where possible. `/compact` triggers the same process manually.
+Sarma compacts conversation context when the estimated token count approaches
+the configured model window. Older context becomes structured memory; recent
+context stays raw where possible. `/compact` triggers the same process manually.
 
-Runtime checkpointer/store services are in-memory LangGraph helpers. Durable
-conversation history and memory artifacts are stored in `./.sarma/db.sqlite`.
+LangGraph checkpointer/store services are in-memory runtime helpers. Durable
+sessions, messages, memory artifacts, and tool records are stored in
+`./.sarma/db.sqlite`.
 
-Cache is intentionally disabled. Audits depend on mutable external state such as
-the loaded binary, IDA database changes, MCP connection state, and tool results.
-Incorrect cache hits could hide changed evidence.
-
-## Native Packages
-
-Native packages are built on the matching host OS/architecture. Sarma does not
-cross-compile Nuitka artifacts.
-
-| Target | Package |
-|--------|---------|
-| Windows x86_64 | `.msi` |
-| macOS arm64 | `.pkg` |
-| Linux x86_64 | `.deb`, `.pkg.tar.zst` |
-| Linux arm64 | `.deb`, `.pkg.tar.zst` |
-
-Build requirements:
-
-- all platforms: `uv` and Python 3.12+;
-- Windows: MSVC Build Tools, .NET SDK, and WiX Toolset;
-- macOS: Apple command line tools with `pkgbuild`;
-- Linux: `dpkg-deb` and `zstd`;
-- Linux arm64: `clang` and `lld` are used for the Nuitka C backend/linker.
-
-Install Windows packaging tools:
-
-```powershell
-scripts\install_windows_packaging_tools.ps1
-```
-
-Equivalent manual commands:
-
-```powershell
-winget install --id Microsoft.DotNet.SDK.8 --exact --source winget
-dotnet tool install --global wix
-```
-
-Windows uses MSVC with `--include-windows-runtime-dlls=yes`. Nuitka does not
-support `--mingw64` with Python 3.13+.
-
-Local native builds use the same scripts as CI:
-
-```bash
-# Windows PowerShell
-scripts\build_native_windows.ps1 -Arch x86_64 -Formats msi -Jobs 4
-
-# macOS
-sh scripts/build_native_macos.sh --arch arm64 --formats pkg --jobs 4
-
-# Linux
-sh scripts/build_native_linux.sh --arch x86_64 --formats deb,pkg --jobs 4
-sh scripts/build_native_linux.sh --arch arm64 --formats deb,pkg --jobs 4
-```
-
-Each wrapper runs the full release pipeline:
-
-1. compile `src`, `tests`, and `scripts`;
-2. run the focused pytest suite;
-3. build the Nuitka executable;
-4. run `sarma --help` against the built executable;
-5. package the executable into the requested native installer formats.
-
-Outputs are written to:
-
-- `dist/nuitka/<platform>-<machine>/` for Nuitka build output;
-- `dist/packages/` for final installers.
-
-For partial local runs, pass these flags through the wrapper:
-
-```bash
---skip-tests
---skip-build
---skip-smoke
---skip-package
-```
-
-The GitHub native release workflow only selects a target matrix and invokes the
-same local wrapper scripts. Manual workflow dispatch can build `all`,
-`windows-x86_64`, `macos-arm64`, `linux-x86_64`, or `linux-arm64`.
-
-Linux artifacts may be much larger than macOS artifacts because the Linux job
-currently uploads both `.deb` and `.pkg.tar.zst`, and each package contains the
-same Nuitka onefile executable payload. Use `--formats deb` or `--formats pkg`
-locally if you want to compare one Linux package at a time.
+Result caching is intentionally not enabled for model/tool outputs. Audits
+depend on mutable external state such as a loaded binary, IDA database changes,
+MCP connection state, and tool results.
 
 ## Development
-
-- Architecture map: [project.md](project.md)
-- Development guide: [docs/development.md](docs/development.md)
 
 Useful checks:
 
 ```bash
-uv run python -m compileall -q src tests scripts
-uv run pytest tests/test_build_nuitka.py tests/test_runtime_boundaries.py -q
-uv run sarma --help
+bun run typecheck
+bun test
+bun run sarma --help
 ```
+
+More detail:
+
+- Architecture map: [project.md](project.md)
+- Development guide: [code.md](code.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT, as declared in `package.json`.

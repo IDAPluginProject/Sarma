@@ -1,38 +1,6 @@
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-build/
+node_modules/
 dist/
-htmlcov/
-
-# Caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.cache/
-
-# Sarma runtime data (created by `sarma init`)
-.sarma/
-
-# Databases
-*.sqlite
-*.sqlite3
-*.db
-*.db-shm
-*.db-wal
-
-# Virtualenv
-.venv/
-
-# Editors / OS
-.vscode/
-.codex/
-Thumbs.db
-.DS_Store
-
-# Misc
 *.log
-*.tmp
-*.bak
-*.orig
+.sarma/
+large_tool_results/
+bun.lockb
