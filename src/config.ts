@@ -325,9 +325,8 @@ function ensureGlobalConfigSuite(): void {
   }
 }
 
-/** Create local workspace directories without copying global config files. */
+/** Create local workspace directories without touching global config files. */
 export function ensureWorkspaceConfig(): void {
-  ensureGlobalConfigSuite();
   mkdirSync(paths.localDir(), { recursive: true });
   mkdirSync(paths.localSkillsDir(), { recursive: true });
   mkdirSync(paths.ragDocsDir(), { recursive: true });
@@ -473,7 +472,7 @@ function mergeNamed<T extends { name: string }>(globalItems: T[], localItems: T[
 
 /** Initialize global and workspace config files. Returns the dirs touched. */
 export function initConfig(local = false): { global: string; workspace: string } {
-  ensureGlobalConfigSuite();
+  if (!local) ensureGlobalConfigSuite();
   ensureWorkspaceConfig();
   return { global: paths.globalDir(), workspace: paths.localDir() };
 }
@@ -500,6 +499,7 @@ export function loadLocalRagConfig(): RagConfig {
 
 /** Load the effective config suite using global defaults plus local overlays. */
 export function loadConfig(): CliConfig {
+  ensureGlobalConfigSuite();
   ensureWorkspaceConfig();
   const [active, models] = parseModels(readToml(paths.globalModelsFile()));
   const agents = parseAgents(readToml(paths.globalAgentsFile()));

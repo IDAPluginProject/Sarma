@@ -96,6 +96,7 @@ function mockController(over: Partial<Controller> = {}): Controller {
     workflows: () => ["ruflo", "audit", "audit-slim"],
     sessionId: () => "",
     submit: async () => {},
+    cancelCurrentRun: () => false,
     setWorkflow: () => {},
     workflowPickerOpen: () => false,
     workflowPickerSelectedIndex: () => 0,
@@ -380,6 +381,86 @@ describe("TUI App", () => {
     t.mockInput.pressCtrlC();
     await t.renderOnce();
     expect(exits).toBe(1);
+  });
+
+  test("stops the current workflow only after two Esc presses", async () => {
+    let exits = 0;
+    let cancels = 0;
+    const notes: string[] = [];
+    const t = await renderTui(
+      () =>
+        App({
+          controller: mockController({
+            busy: () => true,
+            note: (text) => notes.push(text),
+            cancelCurrentRun: () => {
+              cancels += 1;
+              return true;
+            },
+          }),
+          onExit: () => exits++,
+        }),
+      { width: 84, height: 22 },
+    );
+    await t.renderOnce();
+
+    t.mockInput.pressEscape();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await t.renderOnce();
+    expect(cancels).toBe(0);
+    expect(exits).toBe(0);
+    expect(notes.at(-1)).toContain("Press Esc again");
+
+    t.mockInput.pressEscape();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await t.renderOnce();
+    expect(cancels).toBe(1);
+    expect(exits).toBe(0);
+  });
+
+  test("restores the cancelled prompt to the input box", async () => {
+    const [isBusy, setBusy] = createSignal(false);
+    let resolveSubmit: (() => void) | undefined;
+    const submitted: string[] = [];
+    const t = await renderTui(
+      () =>
+        App({
+          controller: mockController({
+            busy: isBusy,
+            items: [],
+            submit: async (text) => {
+              submitted.push(text);
+              setBusy(true);
+              await new Promise<void>((resolve) => {
+                resolveSubmit = resolve;
+              });
+              setBusy(false);
+            },
+            cancelCurrentRun: () => {
+              setBusy(false);
+              resolveSubmit?.();
+              return true;
+            },
+          }),
+          onExit: () => {},
+        }),
+      { width: 100, height: 18, autoFocus: true },
+    );
+    await t.renderOnce();
+
+    await t.mockInput.typeText("audit target");
+    t.mockInput.pressEnter();
+    await t.renderOnce();
+    expect(submitted).toEqual(["audit target"]);
+
+    t.mockInput.pressEscape();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await t.renderOnce();
+    t.mockInput.pressEscape();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await t.renderOnce();
+
+    expect(t.captureCharFrame()).toContain("audit target");
   });
 
   test("renders chat, input and status sidebar", async () => {

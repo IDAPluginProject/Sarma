@@ -399,6 +399,11 @@ When at least one knowledge base is enabled, Sarma attaches a built-in
 `http_exchange` is the preferred tool for HTTP/HTTPS checks. Use
 `packet_exchange` for lower-level or non-HTTP protocol probes.
 
+Built-in tools are independent from MCP server selection. Workflow `mcp`
+allowlists and skill tool allow/deny lists filter MCP-provided tools before
+these local tools are appended; they do not disable `rag_search`, `web_search`,
+`http_exchange`, or `packet_exchange`.
+
 ## Context And State
 
 Sarma compacts conversation context when the estimated token count approaches

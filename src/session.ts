@@ -59,6 +59,7 @@ export class Session {
   private readonly compactTriggerRatio = 0.9;
   private readonly compactTargetRatio = 0.55;
   private currentWorkflow: string = defaultWorkflowName();
+  private currentRunAbort: AbortController | null = null;
 
   constructor(
     private readonly config: CliConfig,
@@ -123,6 +124,7 @@ export class Session {
 
   /** Rebuild runtime resources while preserving conversation history. */
   async restartRuntime(): Promise<void> {
+    this.cancelCurrentRun();
     await this.pool.disconnect();
     this.pool = new McpClientPool();
     this.modelFactory = new ModelFactory();
@@ -133,6 +135,13 @@ export class Session {
     });
     this.resolver = new RuntimePolicyResolver(this.config);
     this.resetGraphState();
+  }
+
+  cancelCurrentRun(): boolean {
+    const controller = this.currentRunAbort;
+    if (!controller || controller.signal.aborted) return false;
+    controller.abort();
+    return true;
   }
 
   newConversation(title = ""): string {
@@ -215,11 +224,15 @@ export class Session {
     const turnId = uid();
     const runPlan = this.resolver.resolve(mode);
     const toolExecutionIds = new Map<string, string>();
+    const abortController = new AbortController();
+    this.currentRunAbort = abortController;
 
     yield makeRunStartedEvent(this._conversationId, turnId);
 
     try {
+      if (abortController.signal.aborted) throw new Error("Run cancelled.");
       await this.pool.connect(Session.serverConfigsFor(runPlan.enabledServers));
+      if (abortController.signal.aborted) throw new Error("Run cancelled.");
 
       await this.compactContext({
         force: false,
@@ -256,9 +269,11 @@ export class Session {
         subagentMcpAllow: runPlan.subagentMcpAllow,
         subagentSkills: runPlan.subagentSkills,
         rag: runPlan.rag,
+        abortSignal: abortController.signal,
       });
 
       for await (const event of runner.run(userMessage)) {
+        if (abortController.signal.aborted) throw new Error("Run cancelled.");
         this.persistToolEvent(event, toolExecutionIds);
         if (mode === "audit" || mode === "audit-slim") {
           this.trackGraphProgress(event);
@@ -296,8 +311,10 @@ export class Session {
       }
       yield makeRunCompletedEvent(this._conversationId, turnId, finalContent);
     } catch (exc) {
-      const message = exc instanceof Error ? exc.message : String(exc);
+      const message = abortController.signal.aborted ? "Run cancelled." : exc instanceof Error ? exc.message : String(exc);
       yield makeRunFailedEvent(this._conversationId, turnId, message);
+    } finally {
+      if (this.currentRunAbort === abortController) this.currentRunAbort = null;
     }
   }
 
@@ -416,6 +433,7 @@ export class Session {
   }
 
   async close(): Promise<void> {
+    this.cancelCurrentRun();
     await this.pool.disconnect();
   }
 }

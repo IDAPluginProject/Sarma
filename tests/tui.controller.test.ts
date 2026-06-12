@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createRoot } from "solid-js";
-import { AgentConfig, CliConfig, KnowledgeBaseConfig, McpServerConfig, ProviderConfig } from "@/config";
+import {
+  AgentConfig,
+  CliConfig,
+  KnowledgeBaseConfig,
+  loadConfig,
+  McpServerConfig,
+  ProviderConfig,
+  saveMcpServers,
+} from "@/config";
 import { createController } from "@/tui/controller";
 import { parseContextSize } from "@/tui/controller";
 import { Store } from "@/store";
@@ -524,6 +532,71 @@ describe("TUI controller stages and lifecycle", () => {
         })();
       });
     });
+  });
+
+  test("cancelCurrentRun marks running transcript items as cancelled", async () => {
+    const originalRunTurn = Session.prototype.runTurn;
+    const originalCancelCurrentRun = Session.prototype.cancelCurrentRun;
+    let releaseRun: (() => void) | undefined;
+    Session.prototype.runTurn = async function* () {
+      yield new StreamEvent({
+        type: StreamEventType.STAGE_START,
+        payload: { stage: "recon", description: "Map attack surface" },
+      });
+      yield new StreamEvent({
+        type: StreamEventType.TOOL_START,
+        payload: { tool_name: "ida__get_metadata", tool_call_id: "tool-1", args_json: "{}" },
+      });
+      yield new StreamEvent({
+        type: StreamEventType.SUBAGENT_START,
+        payload: { subagent: "recon", description: "Map attack surface", tool_call_id: "delegate-recon" },
+      });
+      await new Promise<void>((resolve) => {
+        releaseRun = resolve;
+      });
+    };
+    Session.prototype.cancelCurrentRun = () => true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        createRoot((dispose) => {
+          void (async () => {
+            try {
+              const c = createController(new CliConfig(), ["ruflo", "audit", "audit-slim"]);
+              c.setWorkflow("audit");
+              const submitPromise = c.submit("audit target");
+              for (let idx = 0; idx < 20 && c.items.length < 4; idx += 1) {
+                await new Promise((tick) => setTimeout(tick, 0));
+              }
+
+              expect(c.cancelCurrentRun()).toBe(true);
+              releaseRun?.();
+              await submitPromise;
+
+              const tool = c.items.find((item) => item.kind === "tool")?.tool;
+              const subagent = c.items.find((item) => item.kind === "subagent")?.subagent;
+              const stage = c.items.find((item) => item.kind === "stage")?.stage;
+              expect(tool?.status).toBe("error");
+              expect(tool?.error).toBe("Cancelled.");
+              expect(subagent?.status).toBe("error");
+              expect(subagent?.error).toBe("Cancelled.");
+              expect(stage?.status).toBe("error");
+              expect(stage?.error).toBe("Cancelled.");
+              expect(c.stages().find((item) => item.name === "recon")?.status).toBe("error");
+
+              await c.close();
+              dispose();
+              resolve();
+            } catch (exc) {
+              dispose();
+              reject(exc);
+            }
+          })();
+        });
+      });
+    } finally {
+      Session.prototype.runTurn = originalRunTurn;
+      Session.prototype.cancelCurrentRun = originalCancelCurrentRun;
+    }
   });
 
   test("submit keeps streamed text before the tool call that follows it", async () => {
@@ -1283,6 +1356,81 @@ describe("TUI controller migrated Python slash-command helpers", () => {
             expect(readFileSync(paths.globalMcpFile(), "utf-8")).toContain('url = "http://127.0.0.1:5000/mcp"');
             if (existsSync(paths.localMcpFile())) {
               expect(readFileSync(paths.localMcpFile(), "utf-8")).not.toContain('name = "ida"');
+            }
+
+            await c.close();
+            dispose();
+            resolve();
+          } catch (exc) {
+            dispose();
+            reject(exc);
+          }
+        })();
+      });
+    });
+  });
+
+  test("plugin TUI local MCP save does not copy global MCP secrets", async () => {
+    saveMcpServers(
+      [
+        new McpServerConfig({
+          name: "global-secret",
+          transport: "stdio",
+          command: "python",
+          env: "{\"TOKEN\":\"secret\"}",
+          enabled: true,
+        }),
+      ],
+      "global",
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        void (async () => {
+          try {
+            const config = loadConfig();
+            const c = createController(config, ["ruflo"]);
+
+            c.newPluginMcp();
+            c.setPluginMcpField("name", "local-ida");
+            c.setPluginMcpField("transport", "http");
+            c.setPluginMcpField("url", "http://127.0.0.1:5000/mcp");
+            c.setPluginMcpField("scope", "local");
+            expect(await c.savePluginMcp()).toBeNull();
+
+            const local = readFileSync(paths.localMcpFile(), "utf-8");
+            expect(local).toContain('name = "local-ida"');
+            expect(local).not.toContain("global-secret");
+            expect(local).not.toContain("TOKEN");
+            expect(readFileSync(paths.globalMcpFile(), "utf-8")).toContain("global-secret");
+
+            await c.close();
+            dispose();
+            resolve();
+          } catch (exc) {
+            dispose();
+            reject(exc);
+          }
+        })();
+      });
+    });
+  });
+
+  test("plugin TUI toggles global MCP in global scope", async () => {
+    saveMcpServers([new McpServerConfig({ name: "global-ida", transport: "http", url: "http://global", enabled: true })], "global");
+
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        void (async () => {
+          try {
+            const config = loadConfig();
+            const c = createController(config, ["ruflo"]);
+
+            expect(await c.toggleSelectedPlugin()).toBeNull();
+
+            expect(readFileSync(paths.globalMcpFile(), "utf-8")).toContain("enabled = false");
+            if (existsSync(paths.localMcpFile())) {
+              expect(readFileSync(paths.localMcpFile(), "utf-8")).not.toContain("global-ida");
             }
 
             await c.close();

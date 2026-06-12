@@ -18,7 +18,30 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import * as paths from "@/paths";
-import { KnowledgeBaseConfig, RagConfig } from "@/config";
+
+export interface KnowledgeBaseSettings {
+  name: string;
+  docsPath: string;
+  chromaPath: string;
+  backend: string;
+  chromaUrl: string;
+  collectionName: string;
+  tenant: string;
+  database: string;
+  headers: string;
+  enabled: boolean;
+}
+
+export interface RagSettings {
+  embeddingBackend: string;
+  embeddingModel: string;
+  embeddingApiBase: string;
+  embeddingApiKey: string;
+  embeddingLocalPath: string;
+  chunkSize: number;
+  chunkOverlap: number;
+  knowledgeBases: KnowledgeBaseSettings[];
+}
 
 const TEXT_SUFFIXES = new Set([
   ".bat", ".c", ".cfg", ".conf", ".cpp", ".css", ".go", ".h", ".hpp", ".htm",
@@ -71,15 +94,15 @@ type ChromaClientLike = {
   getCollection(args: { name: string; embeddingFunction?: unknown }): Promise<unknown>;
 };
 
-let chromaClientFactory: ((kb: KnowledgeBaseConfig) => ChromaClientLike) | null = null;
+let chromaClientFactory: ((kb: KnowledgeBaseSettings) => ChromaClientLike) | null = null;
 
-export function setChromaClientFactoryForTests(factory: ((kb: KnowledgeBaseConfig) => ChromaClientLike) | null): void {
+export function setChromaClientFactoryForTests(factory: ((kb: KnowledgeBaseSettings) => ChromaClientLike) | null): void {
   chromaClientFactory = factory;
 }
 
 export function upsertKnowledgeBase(
-  knowledgeBases: KnowledgeBaseConfig[],
-  knowledgeBase: KnowledgeBaseConfig,
+  knowledgeBases: KnowledgeBaseSettings[],
+  knowledgeBase: KnowledgeBaseSettings,
 ): void {
   const index = knowledgeBases.findIndex((kb) => kb.name === knowledgeBase.name);
   if (index >= 0) knowledgeBases[index] = knowledgeBase;
@@ -87,8 +110,8 @@ export function upsertKnowledgeBase(
 }
 
 export async function chunkKnowledgeBase(
-  kb: KnowledgeBaseConfig,
-  rag: RagConfig,
+  kb: KnowledgeBaseSettings,
+  rag: RagSettings,
 ): Promise<ChunkResult> {
   const root = knowledgeBaseDocsPath(kb);
   if (!existsSync(root)) {
@@ -126,7 +149,7 @@ export async function chunkKnowledgeBase(
 }
 
 /** Build the configured embedding model, or null when none is usable. */
-export function buildEmbeddingModel(rag: RagConfig): EmbeddingModel | null {
+export function buildEmbeddingModel(rag: RagSettings): EmbeddingModel | null {
   const backend = rag.embeddingBackend.trim().toLowerCase() || "huggingface";
   const modelName = embeddingModelName(rag);
   if (!modelName) return null;
@@ -139,14 +162,14 @@ export function buildEmbeddingModel(rag: RagConfig): EmbeddingModel | null {
   return null;
 }
 
-export function pullEmbeddingModel(_rag: RagConfig): PullResult {
+export function pullEmbeddingModel(_rag: RagSettings): PullResult {
   throw new Error(
     "Local HuggingFace model pulling is not supported in the TypeScript port. " +
       "Use the 'api' embedding backend (set rag.embedding_backend = \"api\").",
   );
 }
 
-export function buildRagSearchTool(rag: RagConfig): StructuredToolInterface {
+export function buildRagSearchTool(rag: RagSettings): StructuredToolInterface {
   return tool(
     async ({ query, knowledge_base = "", top_k = 5 }: {
       query: string;
@@ -170,7 +193,7 @@ export function buildRagSearchTool(rag: RagConfig): StructuredToolInterface {
 }
 
 export async function searchKnowledgeBases(
-  rag: RagConfig,
+  rag: RagSettings,
   options: { query: string; knowledgeBase?: string; topK?: number },
 ): Promise<string> {
   const query = options.query.trim();
@@ -246,12 +269,12 @@ export function knowledgeBaseDocsDir(name: string): string {
   return join(paths.ragDocsDir(), safeName(name));
 }
 
-export function knowledgeBaseDocsPath(kb: KnowledgeBaseConfig): string {
+export function knowledgeBaseDocsPath(kb: KnowledgeBaseSettings): string {
   if (kb.docsPath.trim()) return expandUser(kb.docsPath);
   return knowledgeBaseDocsDir(kb.name);
 }
 
-export function knowledgeBaseChromaPath(kb: KnowledgeBaseConfig): string {
+export function knowledgeBaseChromaPath(kb: KnowledgeBaseSettings): string {
   if (kb.chromaPath.trim()) return expandUser(kb.chromaPath);
   return join(paths.ragChromaDir(), safeName(kb.name));
 }
@@ -265,7 +288,7 @@ export function isChromaDatabase(path: string): boolean {
   );
 }
 
-export function embeddingModelLocalPath(rag: RagConfig): string {
+export function embeddingModelLocalPath(rag: RagSettings): string {
   if (rag.embeddingLocalPath.trim()) return expandUser(rag.embeddingLocalPath);
   return join(paths.ragModelsDir(), safeName(rag.embeddingModel));
 }
@@ -280,7 +303,7 @@ interface EmbeddingModel {
 class OpenAIEmbeddingAdapter implements EmbeddingModel {
   private impl: { embedDocuments(t: string[]): Promise<number[][]>; embedQuery(t: string): Promise<number[]> } | null =
     null;
-  constructor(private readonly rag: RagConfig) {}
+  constructor(private readonly rag: RagSettings) {}
 
   private async load() {
     if (this.impl) return this.impl;
@@ -300,7 +323,7 @@ class OpenAIEmbeddingAdapter implements EmbeddingModel {
   }
 }
 
-function embeddingModelName(rag: RagConfig): string {
+function embeddingModelName(rag: RagSettings): string {
   if (rag.embeddingBackend.trim().toLowerCase() === "huggingface") {
     const localPath = embeddingModelLocalPath(rag);
     if (existsSync(localPath)) return localPath;
@@ -317,8 +340,8 @@ function openChunkDb(persistDirectory: string): Database {
 }
 
 async function writeChunkDocuments(
-  kb: KnowledgeBaseConfig,
-  rag: RagConfig,
+  kb: KnowledgeBaseSettings,
+  rag: RagSettings,
   records: ChunkDocument[],
   persistDirectory: string,
 ): Promise<void> {
@@ -356,8 +379,8 @@ async function writeChunkDocuments(
 }
 
 async function searchChunkDatabase(
-  kb: KnowledgeBaseConfig,
-  rag: RagConfig,
+  kb: KnowledgeBaseSettings,
+  rag: RagSettings,
   query: string,
   topK: number,
 ): Promise<SearchHit[]> {
@@ -405,7 +428,7 @@ async function searchChunkDatabase(
 }
 
 async function searchChromaHttpKnowledgeBase(
-  kb: KnowledgeBaseConfig,
+  kb: KnowledgeBaseSettings,
   query: string,
   topK: number,
 ): Promise<SearchHit[]> {
@@ -428,7 +451,7 @@ async function searchChromaHttpKnowledgeBase(
   ]);
 }
 
-async function chromaClient(kb: KnowledgeBaseConfig): Promise<ChromaClientLike> {
+async function chromaClient(kb: KnowledgeBaseSettings): Promise<ChromaClientLike> {
   if (chromaClientFactory) return chromaClientFactory(kb);
   const { ChromaClient } = await import("chromadb");
   const headers = parseHeaders(kb.headers);

@@ -13,7 +13,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 
 import { AgentFactory } from "@/engine/agentFactory";
-import type { McpServerDTO, ModelProviderDTO } from "@/engine/dto";
+import { RagConfigDTO, type McpServerDTO, type ModelProviderDTO } from "@/engine/dto";
 import { AgentRunError } from "@/engine/errors";
 import { McpClientPool } from "@/engine/mcpPool";
 import {
@@ -23,7 +23,6 @@ import {
   ResolvedSkill,
   StreamEvent,
 } from "@/engine/models";
-import { RagConfig } from "@/config";
 import { EventTranslator } from "@/engine/streaming";
 import { StreamEventType } from "@/engine/enums";
 
@@ -46,7 +45,8 @@ export interface AgentRunnerOptions {
   subagentProviders?: Record<string, ModelProviderDTO>;
   subagentMcpAllow?: Record<string, string[] | null>;
   subagentSkills?: Record<string, ResolvedSkill | null>;
-  rag?: RagConfig | null;
+  rag?: RagConfigDTO | null;
+  abortSignal?: AbortSignal | null;
 }
 
 /** Build a LangGraph agent, run it with streaming, and yield events. */
@@ -76,8 +76,8 @@ export class AgentRunner {
   }
 
   private readonly opts: Required<
-    Omit<AgentRunnerOptions, "rag">
-  > & { rag: RagConfig };
+    Omit<AgentRunnerOptions, "rag" | "abortSignal">
+  > & { rag: RagConfigDTO; abortSignal: AbortSignal | null };
 
   constructor(options: AgentRunnerOptions) {
     this.opts = {
@@ -94,7 +94,8 @@ export class AgentRunner {
       subagentProviders: options.subagentProviders ?? {},
       subagentMcpAllow: options.subagentMcpAllow ?? {},
       subagentSkills: options.subagentSkills ?? {},
-      rag: options.rag ?? new RagConfig(),
+      rag: options.rag ?? new RagConfigDTO(),
+      abortSignal: options.abortSignal ?? null,
     };
   }
 
@@ -128,11 +129,13 @@ export class AgentRunner {
 
     let stream: AsyncIterable<unknown>;
     try {
+      if (o.abortSignal?.aborted) throw new AgentRunError("Run cancelled.", true);
       stream = await streamFn.call(agent, graphInput, {
         streamMode: ["messages", "updates", "custom"],
         subgraphs: true,
         recursionLimit: this.runConfig.maxSteps,
         configurable: { thread_id: o.conversationId },
+        signal: o.abortSignal ?? undefined,
       });
       if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
         throw new Error("Compiled agent stream() did not return an AsyncIterable.");
@@ -143,6 +146,7 @@ export class AgentRunner {
 
     try {
       for await (const chunk of stream) {
+        if (o.abortSignal?.aborted) throw new AgentRunError("Run cancelled.", true);
         this.accumulateReasoning(chunk);
         this.captureStageOutputs(chunk);
         for (const streamEvent of translator.translate(chunk)) {

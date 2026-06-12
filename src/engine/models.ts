@@ -6,7 +6,7 @@ import {
   SystemMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import { RagConfig } from "@/config";
+import { RagConfigDTO } from "@/engine/dto";
 import type { ModelProviderDTO, McpServerDTO } from "@/engine/dto";
 
 function uid(): string {
@@ -307,7 +307,7 @@ export interface AgentRunConfig {
   subagentProviders: Record<string, ModelProviderDTO>;
   subagentMcpAllow: Record<string, string[] | null>;
   subagentSkills: Record<string, ResolvedSkill | null>;
-  rag: RagConfig;
+  rag: RagConfigDTO;
 }
 
 export function makeAgentRunConfig(
@@ -327,6 +327,6 @@ export function makeAgentRunConfig(
     subagentProviders: init.subagentProviders ?? {},
     subagentMcpAllow: init.subagentMcpAllow ?? {},
     subagentSkills: init.subagentSkills ?? {},
-    rag: init.rag ?? new RagConfig(),
+    rag: init.rag ?? new RagConfigDTO(),
   };
 }

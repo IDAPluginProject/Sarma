@@ -16,7 +16,9 @@ import {
   AgentConfig,
   type CliConfig,
   KnowledgeBaseConfig,
+  loadGlobalMcpServers,
   loadGlobalRagConfig,
+  loadLocalMcpServers,
   loadLocalRagConfig,
   McpServerConfig,
   ProviderConfig,
@@ -272,6 +274,7 @@ export interface Controller {
   sessionId: () => string;
   /** Submit a user message; resolves when the turn finishes. */
   submit: (text: string) => Promise<void>;
+  cancelCurrentRun: () => boolean;
   setWorkflow: (name: string) => void;
   workflowPickerOpen: () => boolean;
   workflowPickerSelectedIndex: () => number;
@@ -1006,6 +1009,55 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
       setBusy(false);
       setStatus(failureMessage ? `error: ${failureMessage}` : "ready");
     }
+  }
+
+  function markRunningItemsCancelled(): void {
+    const now = Date.now();
+    commitDraft();
+    setItems(
+      produce((list) => {
+        for (const item of list) {
+          if (item.kind === "tool" && item.tool.status === "running") {
+            item.tool.status = "error";
+            item.tool.summary ||= "Cancelled.";
+            item.tool.error ||= "Cancelled.";
+            item.tool.elapsed = toolStart.has(item.tool.id) ? (now - toolStart.get(item.tool.id)!) / 1000 : item.tool.elapsed;
+          } else if (item.kind === "subagent" && item.subagent.status === "running") {
+            const key = subagentKey(item.subagent.name, item.subagent.toolCallId);
+            item.subagent.status = "error";
+            item.subagent.error ||= "Cancelled.";
+            item.subagent.elapsed = subagentStart.has(key) ? (now - subagentStart.get(key)!) / 1000 : item.subagent.elapsed;
+          } else if (item.kind === "stage" && item.stage.status === "running") {
+            item.stage.status = "error";
+            item.stage.error ||= "Cancelled.";
+            item.stage.elapsed = stageStart.has(item.stage.name) ? (now - stageStart.get(item.stage.name)!) / 1000 : item.stage.elapsed;
+          }
+        }
+      }),
+    );
+    setStages(
+      produce((list) => {
+        for (const stage of list) {
+          if (stage.status === "running") stage.status = "error";
+        }
+      }),
+    );
+    toolStart.clear();
+    stageStart.clear();
+    subagentStart.clear();
+    toolPending.splice(0, toolPending.length);
+    setActiveWorkflowNode("");
+  }
+
+  function cancelCurrentRun(): boolean {
+    if (!busy()) return false;
+    const cancelled = session.cancelCurrentRun();
+    if (cancelled) {
+      markRunningItemsCancelled();
+      setStatus("cancelling");
+      note("Stopping current workflow...");
+    }
+    return cancelled;
   }
 
   function resetLiveTurnState(): void {
@@ -1746,7 +1798,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
       args: server.args,
       env: server.env,
       enabled: server.enabled ? "true" : "false",
-      scope: "local",
+      scope: mcpServerScope(server.name),
     });
     setPluginSectionSig("mcp");
     setPluginStep("mcp-fields");
@@ -1776,6 +1828,47 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
   function normalizePluginScope(value: string): "local" | "global" {
     const scope = value.trim().toLowerCase();
     return scope === "global" ? "global" : "local";
+  }
+
+  function cloneMcpServer(server: McpServerConfig): McpServerConfig {
+    return new McpServerConfig({ ...server });
+  }
+
+  function mergedMcpServers(): McpServerConfig[] {
+    const byName = new Map<string, McpServerConfig>();
+    const order: string[] = [];
+    for (const server of [...loadGlobalMcpServers(), ...loadLocalMcpServers()]) {
+      const name = server.name.trim();
+      if (!name) continue;
+      if (!byName.has(name)) order.push(name);
+      byName.set(name, server);
+    }
+    return order.map((name) => byName.get(name)!);
+  }
+
+  function refreshMergedMcpServers(): void {
+    config.mcpServers = mergedMcpServers();
+  }
+
+  function mcpServerScope(name: string): "local" | "global" {
+    if (loadLocalMcpServers().some((server) => server.name === name)) return "local";
+    if (loadGlobalMcpServers().some((server) => server.name === name)) return "global";
+    return "local";
+  }
+
+  function saveMcpServerToScope(server: McpServerConfig, scope: "local" | "global", oldName = server.name): string {
+    const current = scope === "global" ? loadGlobalMcpServers() : loadLocalMcpServers();
+    const next = current.filter((item) => item.name !== oldName && item.name !== server.name);
+    next.push(cloneMcpServer(server));
+    const savedPath = saveMcpServers(next, scope);
+    refreshMergedMcpServers();
+    return savedPath;
+  }
+
+  function removeMcpServerFromScope(name: string, scope: "local" | "global"): void {
+    const current = scope === "global" ? loadGlobalMcpServers() : loadLocalMcpServers();
+    if (!current.some((server) => server.name === name)) return;
+    saveMcpServers(current.filter((server) => server.name !== name), scope);
   }
 
   function skillsDirForScope(scope: string): string {
@@ -1865,16 +1958,15 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     if (name !== oldName && config.mcpServers.some((server) => server.name === name)) {
       return `MCP server already exists: ${name}`;
     }
-    let server = config.mcpServers.find((item) => item.name === oldName);
-    if (!server) {
-      server = new McpServerConfig({ name });
-      config.mcpServers.push(server);
-    }
+    const server = cloneMcpServer(config.mcpServers.find((item) => item.name === oldName) ?? new McpServerConfig({ name }));
     const error = applyPluginMcpDraft(server);
     if (error) return error;
     let savedPath: string;
     try {
-      savedPath = saveMcpServers(config.mcpServers, normalizePluginScope(pluginMcpDraft.scope));
+      const targetScope = normalizePluginScope(pluginMcpDraft.scope);
+      const previousScope = editingMcpName() ? mcpServerScope(oldName) : targetScope;
+      if (previousScope !== targetScope) removeMcpServerFromScope(oldName, previousScope);
+      savedPath = saveMcpServerToScope(server, targetScope, oldName);
     } catch (exc) {
       return exc instanceof Error ? exc.message : String(exc);
     }
@@ -1985,12 +2077,12 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     if (busy()) return "Cannot change plugins while a turn is running.";
     if (pluginSection() === "mcp") {
       const row = pluginMcpRows()[pluginSelectedIndex()];
-      const server = row ? config.mcpServers.find((item) => item.name === row.name) : undefined;
+      const server = row ? cloneMcpServer(config.mcpServers.find((item) => item.name === row.name) ?? new McpServerConfig()) : undefined;
       if (!server) return "No MCP server selected.";
       server.enabled = !server.enabled;
       let savedPath: string;
       try {
-        savedPath = saveMcpServers(config.mcpServers, "local");
+        savedPath = saveMcpServerToScope(server, mcpServerScope(server.name));
       } catch (exc) {
         return exc instanceof Error ? exc.message : String(exc);
       }
@@ -2084,7 +2176,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
       if (normalizedAction === "add") {
         const target = targetParts.join(" ").trim();
         if (!target) return "usage: /plugin add mcp <name> <url-or-command> [--global]";
-        const server = existing ?? new McpServerConfig({ name: pluginName });
+        const server = cloneMcpServer(existing ?? new McpServerConfig({ name: pluginName }));
         server.enabled = true;
         if (/^https?:\/\//i.test(target)) {
           server.transport = "http";
@@ -2096,14 +2188,20 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
           server.command = target;
           server.url = "";
         }
-        if (!existing) config.mcpServers.push(server);
+        const targetScope = normalizePluginScope(scopeFlag);
+        const previousScope = existing ? mcpServerScope(pluginName) : targetScope;
+        if (previousScope !== targetScope) removeMcpServerFromScope(pluginName, previousScope);
+        const savedPath = saveMcpServerToScope(server, targetScope);
+        await restartRuntime();
+        return `MCP ${pluginName} enabled.\nsaved: ${savedPath}`;
       } else {
         if (!existing) return `unknown MCP server: ${pluginName}`;
-        existing.enabled = normalizedAction === "enable";
+        const server = cloneMcpServer(existing);
+        server.enabled = normalizedAction === "enable";
+        const savedPath = saveMcpServerToScope(server, mcpServerScope(pluginName));
+        await restartRuntime();
+        return `MCP ${pluginName} ${normalizedAction === "disable" ? "disabled" : "enabled"}.\nsaved: ${savedPath}`;
       }
-      const savedPath = saveMcpServers(config.mcpServers, normalizedAction === "add" ? scopeFlag : "local");
-      await restartRuntime();
-      return `MCP ${pluginName} ${normalizedAction === "disable" ? "disabled" : "enabled"}.\nsaved: ${savedPath}`;
     }
 
     const availableSkills = listAvailableSkills();
@@ -2801,6 +2899,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     workflows: () => workflowNames,
     sessionId: () => session.conversationId,
     submit,
+    cancelCurrentRun,
     setWorkflow,
     workflowPickerOpen,
     workflowPickerSelectedIndex,

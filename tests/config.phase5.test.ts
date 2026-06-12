@@ -1,5 +1,5 @@
 import { expect, test, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   saveModels,
   saveAgents,
   saveMcpServers,
+  initConfig,
   saveRagKnowledgeBases,
   ProviderConfig,
   McpServerConfig,
@@ -18,6 +19,7 @@ import {
 } from "@/config";
 import { loadSkill, loadSkills, listAvailableSkills } from "@/resources/skills";
 import { Store } from "@/store";
+import * as paths from "@/paths";
 
 let tmpHome: string;
 let tmpCwd: string;
@@ -75,6 +77,15 @@ describe("config load/save roundtrip", () => {
     expect(cfg.models.length).toBeGreaterThan(0);
     expect(cfg.agents.some((a) => a.name === "ruflo")).toBe(true);
     expect(cfg.agents.some((a) => a.name === "audit.recon")).toBe(true);
+  });
+
+  test("initConfig local only creates workspace dirs without touching global config", () => {
+    const result = initConfig(true);
+    expect(result.workspace).toBe(paths.localDir());
+    expect(existsSync(paths.localDir())).toBe(true);
+    expect(existsSync(paths.localSkillsDir())).toBe(true);
+    expect(existsSync(paths.globalModelsFile())).toBe(false);
+    expect(existsSync(paths.globalMcpFile())).toBe(false);
   });
 
   test("saveModels then loadConfig roundtrips a custom model", () => {

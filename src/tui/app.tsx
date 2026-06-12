@@ -42,6 +42,11 @@ export function isCtrlCKey(key: TuiKeyEventLike): boolean {
   return (Boolean(key.ctrl) && name === "c") || key.sequence === "\u0003" || key.raw === "\u0003";
 }
 
+export function isEscapeKey(key: TuiKeyEventLike): boolean {
+  const name = (key.name ?? "").toLowerCase();
+  return name === "escape" || key.sequence === "\u001b" || key.raw === "\u001b";
+}
+
 export function tuiHelpText(): string {
   return [
     "commands:",
@@ -828,19 +833,50 @@ export function App(props: { controller: Controller; onExit: () => void }) {
   const [selectedSubagentId, setSelectedSubagentId] = createSignal("");
   // Double Ctrl+C to exit (kilo pattern): first press arms a 1s window.
   const [exitArmed, setExitArmed] = createSignal(false);
+  const [cancelArmed, setCancelArmed] = createSignal(false);
   let exitTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelTimer: ReturnType<typeof setTimeout> | undefined;
   let inputRef: FocusableInputRef | undefined;
   let historyIndex: number | undefined;
   let historyDraft = "";
   let historyAppliedValue: string | undefined;
+  let activeSubmittedPrompt = "";
 
   const focusInput = () => {
     inputRef?.focus?.();
   };
 
+  const handleWorkflowStopEsc = () => {
+    if (cancelArmed()) {
+      if (cancelTimer) clearTimeout(cancelTimer);
+      setCancelArmed(false);
+      if (c.cancelCurrentRun()) {
+        if (activeSubmittedPrompt) {
+          historyAppliedValue = activeSubmittedPrompt;
+          setInput(activeSubmittedPrompt);
+          resetHistoryNavigation();
+        }
+      } else {
+        c.note("No active workflow to stop.");
+      }
+      return;
+    }
+    setCancelArmed(true);
+    c.note("Press Esc again to stop the current workflow.");
+    if (cancelTimer) clearTimeout(cancelTimer);
+    cancelTimer = setTimeout(() => setCancelArmed(false), 1000);
+  };
+
+  const rawEscStopHandler = (sequence: string): boolean => {
+    if (sequence !== "\u001b" || overlaysOpen() || !c.busy()) return false;
+    handleWorkflowStopEsc();
+    return true;
+  };
+
   onMount(() => {
     // Chat-first: land in the chat. Use /config to configure the provider.
     focusInput();
+    renderer.prependInputHandler?.(rawEscStopHandler);
     setInputHistory(loadInputHistory());
     void c.refreshMcpStatus();
     if (!c.hasModel()) {
@@ -849,7 +885,9 @@ export function App(props: { controller: Controller; onExit: () => void }) {
   });
 
   onCleanup(() => {
+    renderer.removeInputHandler?.(rawEscStopHandler);
     if (exitTimer) clearTimeout(exitTimer);
+    if (cancelTimer) clearTimeout(cancelTimer);
   });
 
   useSelectionHandler((selection) => {
@@ -924,6 +962,12 @@ export function App(props: { controller: Controller; onExit: () => void }) {
       return;
     }
     const name = (key.name ?? "").toLowerCase();
+    if (!overlaysOpen() && c.busy() && isEscapeKey(key)) {
+      key.preventDefault?.();
+      key.stopPropagation?.();
+      handleWorkflowStopEsc();
+      return;
+    }
     if (!overlaysOpen() && (name === "up" || name === "down")) {
       if (moveInputHistory(name === "up" ? "older" : "newer")) {
         key.preventDefault?.();
@@ -968,7 +1012,10 @@ export function App(props: { controller: Controller; onExit: () => void }) {
     setInputHistory(appendInputHistory(text));
     resetHistoryNavigation();
     setInput("");
-    void c.submit(text);
+    activeSubmittedPrompt = text;
+    void c.submit(text).finally(() => {
+      if (activeSubmittedPrompt === text) activeSubmittedPrompt = "";
+    });
   };
 
   const runSlash = async (text: string) => {

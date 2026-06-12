@@ -2,13 +2,14 @@
 
 import {
   type CliConfig,
+  type KnowledgeBaseConfig,
   type McpServerConfig,
   type ProviderConfig,
   type RagConfig,
   AgentConfig,
   WILDCARD,
 } from "@/config";
-import { McpServerDTO, ModelProviderDTO } from "@/engine/dto";
+import { KnowledgeBaseDTO, McpServerDTO, ModelProviderDTO, RagConfigDTO } from "@/engine/dto";
 import { ResolvedSkill, resolveSkill } from "@/engine/models";
 import { buildSystemPrompt } from "@/engine/prompts";
 import { subagentsForWorkflow } from "@/workflows";
@@ -33,7 +34,7 @@ export interface RunPlan {
   subagentProviders: Record<string, ModelProviderDTO>;
   subagentMcpAllow: Record<string, string[] | null>;
   subagentSkills: Record<string, ResolvedSkill | null>;
-  rag: RagConfig;
+  rag: RagConfigDTO;
 }
 
 /** Converts config files into the policy needed for one agent run. */
@@ -86,7 +87,7 @@ export class RuntimePolicyResolver {
       subagentProviders,
       subagentMcpAllow,
       subagentSkills,
-      rag: this.config.rag,
+      rag: ragToDto(this.config.rag),
     };
   }
 
@@ -176,6 +177,34 @@ function providerToDto(provider: ProviderConfig): ModelProviderDTO {
     topP: provider.topP,
     maxContextTokens: provider.maxContextTokens,
     enabled: provider.enabled,
+  });
+}
+
+function knowledgeBaseToDto(kb: KnowledgeBaseConfig): KnowledgeBaseDTO {
+  return new KnowledgeBaseDTO({
+    name: kb.name,
+    docsPath: kb.docsPath,
+    chromaPath: kb.chromaPath,
+    backend: kb.backend,
+    chromaUrl: kb.chromaUrl,
+    collectionName: kb.collectionName,
+    tenant: kb.tenant,
+    database: kb.database,
+    headers: kb.headers,
+    enabled: kb.enabled,
+  });
+}
+
+function ragToDto(rag: RagConfig): RagConfigDTO {
+  return new RagConfigDTO({
+    embeddingBackend: rag.embeddingBackend,
+    embeddingModel: rag.embeddingModel,
+    embeddingApiBase: rag.embeddingApiBase,
+    embeddingApiKey: rag.embeddingApiKey,
+    embeddingLocalPath: rag.embeddingLocalPath,
+    chunkSize: rag.chunkSize,
+    chunkOverlap: rag.chunkOverlap,
+    knowledgeBases: rag.knowledgeBases.map(knowledgeBaseToDto),
   });
 }
 

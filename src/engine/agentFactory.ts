@@ -49,6 +49,30 @@ function skillKey(skill: ResolvedSkill | null): Record<string, unknown> | null {
   };
 }
 
+function ragKey(rag: AgentRunConfig["rag"]): Record<string, unknown> {
+  return {
+    embedding_backend: rag.embeddingBackend,
+    embedding_model: rag.embeddingModel,
+    embedding_api_base: rag.embeddingApiBase,
+    embedding_api_key: rag.embeddingApiKey,
+    embedding_local_path: rag.embeddingLocalPath,
+    chunk_size: rag.chunkSize,
+    chunk_overlap: rag.chunkOverlap,
+    knowledge_bases: rag.knowledgeBases.map((kb) => ({
+      name: kb.name,
+      backend: kb.backend,
+      docs_path: kb.docsPath,
+      chroma_path: kb.chromaPath,
+      chroma_url: kb.chromaUrl,
+      collection_name: kb.collectionName,
+      tenant: kb.tenant,
+      database: kb.database,
+      headers: kb.headers,
+      enabled: kb.enabled,
+    })),
+  };
+}
+
 /** Builds a LangGraph agent from runtime configuration. */
 export class AgentFactory {
   private readonly modelFactory: ModelFactory;
@@ -209,13 +233,7 @@ export class AgentFactory {
       subagent_skills: Object.fromEntries(
         sortedEntries(config.subagentSkills).map(([name, skill]) => [name, skillKey(skill)]),
       ),
-      rag: {
-        embedding_backend: config.rag.embeddingBackend,
-        embedding_model: config.rag.embeddingModel,
-        chunk_size: config.rag.chunkSize,
-        chunk_overlap: config.rag.chunkOverlap,
-        knowledge_bases: config.rag.knowledgeBases.map((kb) => kb.name),
-      },
+      rag: ragKey(config.rag),
     };
     return stableStringify(data);
   }

@@ -4,7 +4,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { McpClientPool } from "@/engine/mcpPool";
 import { ModelFactory } from "@/engine/modelFactory";
 import { ProviderNotConfiguredError } from "@/engine/errors";
-import { ModelProviderDTO, McpServerDTO } from "@/engine/dto";
+import { KnowledgeBaseDTO, McpServerDTO, ModelProviderDTO, RagConfigDTO } from "@/engine/dto";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import {
   startHttpMcpServer,
@@ -240,5 +240,37 @@ describe("AgentFactory tool policy", () => {
       }),
     );
     expect(tools.map((t) => t.name)).toEqual(["web_search", "http_exchange", "packet_exchange"]);
+  });
+
+  test("RAG path changes invalidate cached agents", async () => {
+    const factory = new AgentFactory(new McpClientPool(), { runtimeServices: null });
+    const runConfig = (chromaPath: string) =>
+      makeAgentRunConfig({
+        conversationId: "c",
+        provider: provider(),
+        userMessage: "q",
+        mode: "ruflo",
+        rag: new RagConfigDTO({
+          knowledgeBases: [
+            new KnowledgeBaseDTO({
+              name: "docs",
+              docsPath: "",
+              backend: "sarma_native",
+              chromaPath,
+              chromaUrl: "",
+              collectionName: "",
+              tenant: "",
+              database: "",
+              headers: "",
+              enabled: true,
+            }),
+          ],
+        }),
+      });
+
+    const [firstAgent] = await factory.build(runConfig("/tmp/a"));
+    const [secondAgent] = await factory.build(runConfig("/tmp/b"));
+
+    expect(secondAgent).not.toBe(firstAgent);
   });
 });
