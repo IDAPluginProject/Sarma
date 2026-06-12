@@ -30,6 +30,28 @@ server.
 - Context compaction based on each model profile's configured context window.
 - Workspace session database with `sarma sessions` and `sarma resume <id>`.
 
+## Install
+
+Sarma is published as the Bun CLI package `sarma-seek`. The installed command is
+`sarma`.
+
+Install with Bun:
+
+```bash
+bun add -g sarma-seek
+sarma
+```
+
+Or install with npm:
+
+```bash
+npm install -g sarma-seek
+sarma
+```
+
+The npm-installed command still runs on Bun because Sarma's executable uses
+`#!/usr/bin/env bun`. Make sure `bun` is available in `PATH`.
+
 ## Install From Source
 
 Requires Bun.
