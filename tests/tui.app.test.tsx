@@ -6,7 +6,7 @@ import { createStore } from "solid-js/store";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { App, isCtrlCKey, tuiHelpText } from "@/tui/app";
+import { App, TuiBoot, isCtrlCKey, tuiHelpText } from "@/tui/app";
 import type { Controller } from "@/tui/controller";
 import type { TranscriptItem } from "@/tui/transcript";
 import type { GraphStageView } from "@/tui/controller";
@@ -508,6 +508,50 @@ describe("TUI App", () => {
     // Bottom input stays in the left column.
     expect(frame).toContain("❯");
     expect(frame).toContain("Ask Sarma to audit...");
+  });
+
+  test("renders startup Sarma splash when enabled", async () => {
+    const t = await renderTui(
+      () =>
+        App({
+          controller: mockController({ items: [], busy: () => false }),
+          onExit: () => {},
+          startupAnimation: { durationMs: 10000 },
+        }),
+      { width: 100, height: 24 },
+    );
+    await t.renderOnce();
+    const frame = t.captureCharFrame();
+
+    expect(frame).toContain("SARMA loading");
+    expect(frame).toContain("███████");
+  });
+
+  test("keeps startup splash visible until boot initialization completes", async () => {
+    let finishBoot: ((controller: Controller) => void) | undefined;
+    const bootPromise = new Promise<Controller>((resolve) => {
+      finishBoot = resolve;
+    });
+    const t = await renderTui(
+      () =>
+        TuiBoot({
+          initialize: () => bootPromise,
+          onExit: () => {},
+          onError: () => {},
+        }),
+      { width: 100, height: 24 },
+    );
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("SARMA initializing");
+    expect(t.captureCharFrame()).not.toContain("Ask Sarma to audit...");
+
+    finishBoot?.(mockController({ items: [], busy: () => false }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await t.renderOnce();
+
+    const frame = t.captureCharFrame();
+    expect(frame).toContain("Ask Sarma to audit...");
+    expect(frame).not.toContain("SARMA initializing");
   });
 
   test("renders workflow stage cards in the transcript", async () => {

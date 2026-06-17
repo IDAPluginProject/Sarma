@@ -4,8 +4,8 @@ import { render } from "@opentui/solid";
 import { createCliRenderer } from "@opentui/core";
 import type { CliConfig } from "@/config";
 import { listWorkflowMetas } from "@/workflows";
-import { createController } from "@/tui/controller";
-import { App } from "@/tui/app";
+import { createController, type Controller } from "@/tui/controller";
+import { TuiBoot } from "@/tui/app";
 import { theme } from "@/tui/theme";
 import { debugLog } from "@/debug";
 import { printInfo } from "@/cli/renderer";
@@ -50,17 +50,7 @@ export function createRawCtrlCExitHandler(onExit: () => void, windowMs = 1000): 
 }
 
 export async function runTui(config: CliConfig, workflow?: string, resumeSessionId?: string): Promise<void> {
-  const workflowNames = listWorkflowMetas().map((w) => w.name);
-  const controller = createController(config, workflowNames);
-  if (workflow && workflowNames.includes(workflow)) controller.setWorkflow(workflow);
-  if (resumeSessionId) {
-    if (!controller.resumeSession(resumeSessionId)) {
-      controller.note(`session ${resumeSessionId} not found`);
-    }
-  } else {
-    controller.note("Welcome to Sarma. Type a request.");
-  }
-
+  let controller: Controller | undefined;
   const renderer = await createCliRenderer({
     backgroundColor: theme.background,
     exitOnCtrlC: false,
@@ -84,7 +74,7 @@ export async function runTui(config: CliConfig, workflow?: string, resumeSession
         if (destroyRenderer && !renderer.isDestroyed) {
           renderer.destroy();
         }
-        cleanupPromise = controller.close();
+        cleanupPromise = controller?.close() ?? Promise.resolve();
       }
       void cleanupPromise.then(
         () => {
@@ -111,10 +101,40 @@ export async function runTui(config: CliConfig, workflow?: string, resumeSession
       if (!cleanupStarted) cleanup(false);
     });
 
-    void render(() => App({ controller, onExit: requestExit }), renderer).catch((exc) => cleanup(true, exc));
+    const initialize = async (): Promise<Controller> => {
+      const workflowNames = listWorkflowMetas().map((w) => w.name);
+      const nextController = createController(config, workflowNames);
+      controller = nextController;
+      if (workflow && workflowNames.includes(workflow)) nextController.setWorkflow(workflow);
+      if (resumeSessionId) {
+        if (!nextController.resumeSession(resumeSessionId)) {
+          nextController.note(`session ${resumeSessionId} not found`);
+        }
+      } else {
+        nextController.note("Welcome to Sarma. Type a request.");
+      }
+      await nextController.refreshMcpStatus();
+      if (!nextController.hasModel()) {
+        nextController.note("No model configured yet. Type /config to set one up.");
+      }
+      if (cleanupStarted) {
+        await nextController.close();
+      }
+      return nextController;
+    };
+
+    void render(
+      () =>
+        TuiBoot({
+          initialize,
+          onExit: requestExit,
+          onError: (error) => cleanup(true, error),
+        }),
+      renderer,
+    ).catch((exc) => cleanup(true, exc));
   });
 
-  const sessionId = controller.sessionId();
+  const sessionId = controller?.sessionId();
   if (sessionId) {
     printInfo(pc.dim(`session: ${sessionId}`));
     printInfo(pc.dim(`resume: sarma resume ${sessionId}`));

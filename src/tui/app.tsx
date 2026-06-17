@@ -10,7 +10,7 @@
  *   └ prompt input ─────────────────────────────┘
  */
 
-import { For, Show, Switch, Match, createSignal, onMount, onCleanup } from "solid-js";
+import { For, Show, Switch, Match, createSignal, onMount, onCleanup, type Accessor } from "solid-js";
 import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid";
 import "opentui-spinner/solid";
 
@@ -826,12 +826,120 @@ function Sidebar(props: {
   );
 }
 
-export function App(props: { controller: Controller; onExit: () => void }) {
+const SARMA_SPLASH_ART = [
+  "███████╗ █████╗ ██████╗ ███╗   ███╗ █████╗ ",
+  "██╔════╝██╔══██╗██╔══██╗████╗ ████║██╔══██╗",
+  "███████╗███████║██████╔╝██╔████╔██║███████║",
+  "╚════██║██╔══██║██╔══██╗██║╚██╔╝██║██╔══██║",
+  "███████║██║  ██║██║  ██║██║ ╚═╝ ██║██║  ██║",
+  "╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝",
+];
+
+export interface AppProps {
+  controller: Controller;
+  onExit: () => void;
+  startupAnimation?: boolean | { durationMs?: number };
+  mountInitialization?: boolean;
+}
+
+export function StartupSplash(props: { durationMs?: number; onDone?: () => void; label?: string }) {
+  const dims = useTerminalDimensions();
+  const [frame, setFrame] = createSignal(0);
+  let interval: ReturnType<typeof setInterval> | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const artWidth = SARMA_SPLASH_ART.reduce((max, line) => Math.max(max, line.length), 0);
+  const leftPadding = () => {
+    const center = Math.max(0, Math.floor((dims().width - artWidth) / 2));
+    return center;
+  };
+  const topPadding = () => Math.max(1, Math.floor((dims().height - SARMA_SPLASH_ART.length - 2) / 2));
+  const dots = () => ".".repeat((frame() % 4) + 1).padEnd(4, " ");
+  const label = () => props.label ?? "loading runtime";
+
+  onMount(() => {
+    interval = setInterval(() => setFrame((value) => value + 1), 90);
+    if (props.durationMs !== undefined && props.onDone) {
+      timeout = setTimeout(props.onDone, props.durationMs);
+    }
+  });
+
+  onCleanup(() => {
+    if (interval) clearInterval(interval);
+    if (timeout) clearTimeout(timeout);
+  });
+
+  return (
+    <box
+      position="absolute"
+      left={0}
+      top={0}
+      zIndex={4096}
+      width={dims().width}
+      height={dims().height}
+      overflow="hidden"
+      backgroundColor={theme.background}
+      flexDirection="column"
+      paddingTop={topPadding()}
+      paddingLeft={leftPadding()}
+    >
+      <For each={SARMA_SPLASH_ART}>
+        {(line) => (
+          <text fg={theme.primary} attributes={1} wrapMode="none" truncate>
+            {line}
+          </text>
+        )}
+      </For>
+      <text fg={theme.primary} attributes={1}>
+        SARMA {label()}{dots()}
+      </text>
+    </box>
+  );
+}
+
+export function TuiBoot(props: {
+  initialize: () => Promise<Controller>;
+  onExit: () => void;
+  onError: (error: unknown) => void;
+}) {
+  const [controller, setController] = createSignal<Controller>();
+
+  onMount(() => {
+    let cancelled = false;
+    const boot = async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const next = await props.initialize();
+      if (!cancelled) setController(() => next);
+    };
+    void boot().catch(props.onError);
+    onCleanup(() => {
+      cancelled = true;
+    });
+  });
+
+  return (
+    <Show
+      when={controller()}
+      fallback={<StartupSplash label="initializing" />}
+    >
+      {(activeController: Accessor<Controller>) => (
+        <App
+          controller={activeController()}
+          onExit={props.onExit}
+          mountInitialization={false}
+        />
+      )}
+    </Show>
+  );
+}
+
+export function App(props: AppProps) {
   const c = props.controller;
   const renderer = useRenderer();
   const [input, setInput] = createSignal("");
   const [inputHistory, setInputHistory] = createSignal<string[]>([]);
   const [selectedSubagentId, setSelectedSubagentId] = createSignal("");
+  const [startupVisible, setStartupVisible] = createSignal(Boolean(props.startupAnimation));
   // Double Ctrl+C to exit (kilo pattern): first press arms a 1s window.
   const [exitArmed, setExitArmed] = createSignal(false);
   const [cancelArmed, setCancelArmed] = createSignal(false);
@@ -846,6 +954,9 @@ export function App(props: { controller: Controller; onExit: () => void }) {
   const focusInput = () => {
     inputRef?.focus?.();
   };
+
+  const startupDurationMs = () =>
+    typeof props.startupAnimation === "object" ? props.startupAnimation.durationMs ?? 1100 : 1100;
 
   const handleWorkflowStopEsc = () => {
     if (cancelArmed()) {
@@ -879,9 +990,11 @@ export function App(props: { controller: Controller; onExit: () => void }) {
     focusInput();
     renderer.prependInputHandler?.(rawEscStopHandler);
     setInputHistory(loadInputHistory());
-    void c.refreshMcpStatus();
-    if (!c.hasModel()) {
-      c.note("No model configured yet. Type /config to set one up.");
+    if (props.mountInitialization !== false) {
+      void c.refreshMcpStatus();
+      if (!c.hasModel()) {
+        c.note("No model configured yet. Type /config to set one up.");
+      }
     }
   });
 
@@ -1185,6 +1298,9 @@ export function App(props: { controller: Controller; onExit: () => void }) {
       </Show>
       <Show when={c.ragOpen()}>
         <RagPanel controller={c} />
+      </Show>
+      <Show when={startupVisible()}>
+        <StartupSplash durationMs={startupDurationMs()} onDone={() => setStartupVisible(false)} />
       </Show>
     </box>
   );
