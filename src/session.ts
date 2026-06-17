@@ -337,7 +337,7 @@ export class Session {
         rawTailRatio: this.compactTargetRatio,
         staticPromptTokens: estimateStaticPromptTokens(
           systemPrompt,
-          this.toolCount + Session.builtinAndMiddlewareToolCount(this.resolver.resolve(workflow).rag),
+          this.toolCount + Session.builtinAndMiddlewareToolCount(this.config.rag),
           estimateText,
         ),
         tokenEstimator: estimateText,
@@ -428,7 +428,7 @@ export class Session {
 
   private static builtinAndMiddlewareToolCount(rag: { knowledgeBases: { enabled: boolean; name: string }[] }): number {
     const builtin = 3 + (rag.knowledgeBases.some((kb) => kb.enabled && kb.name) ? 1 : 0);
-    const middleware = 8;
+    const middleware = 13;
     return builtin + middleware;
   }
 

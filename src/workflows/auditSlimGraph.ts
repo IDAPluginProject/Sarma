@@ -88,6 +88,7 @@ export interface BuildAuditSlimGraphOptions {
   maxPriorStageTokens?: number;
   estimateText?: TokenEstimator;
   compileKwargs?: Record<string, unknown>;
+  conversationId?: string;
 }
 
 /** Build and compile the audit-slim StateGraph. */
@@ -119,6 +120,7 @@ export function buildAuditSlimGraph(
       skill: (options.subagentSkills ?? {})[name],
       maxPriorStageTokens: options.maxPriorStageTokens,
       estimateText: options.estimateText,
+      conversationId: options.conversationId,
     }) as unknown as NodeFn;
     g.addNode(name, nodeFn);
   }

@@ -10,6 +10,7 @@ import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { HumanMessage } from "@langchain/core/messages";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
@@ -33,21 +34,11 @@ import { Session } from "@/session";
 import { Store } from "@/store";
 import { StreamEventType } from "@/engine/enums";
 import { ORCHESTRATOR } from "@/engine/streaming";
-import { ModelFactory } from "@/engine/modelFactory";
-import { McpServerDTO, ModelProviderDTO } from "@/engine/dto";
-import { McpClientPool } from "@/engine/mcpPool";
+import type { ModelProviderDTO } from "@/engine/dto";
 import { AUDIT_SUBAGENT_ORDER } from "@/workflows/auditSubagents";
 import { AUDIT_SLIM_SUBAGENT_ORDER } from "@/workflows/auditSlimSubagents";
 import { RuntimePolicyResolver } from "@/runtime/resolver";
 import { listAvailableSkills } from "@/resources/skills";
-import { installSkillFromHub, searchSkillHub } from "@/resources/skillshub";
-import {
-  chunkKnowledgeBase,
-  knowledgeBaseChromaPath,
-  ragKnowledgeBaseName,
-  searchKnowledgeBases,
-  upsertKnowledgeBase,
-} from "@/resources/rag";
 import { type TranscriptItem, type ToolEntry, type SubagentEntry, nextId } from "@/tui/transcript";
 import { debugEnabled, debugLog, debugLogFile, setDebugEnabled } from "@/debug";
 import * as paths from "@/paths";
@@ -248,6 +239,32 @@ function messageContentText(content: unknown): string {
   return content === null || content === undefined ? "" : String(content);
 }
 
+function safePathName(name: string): string {
+  const safe = name.trim().replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || "knowledge-base";
+}
+
+function expandUserPath(path: string): string {
+  if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) {
+    return resolve(join(homedir(), path.slice(1)));
+  }
+  return resolve(path);
+}
+
+function knowledgeBaseChromaPath(kb: KnowledgeBaseConfig): string {
+  if (kb.chromaPath.trim()) return expandUserPath(kb.chromaPath);
+  return join(paths.ragChromaDir(), safePathName(kb.name));
+}
+
+function upsertKnowledgeBase(
+  knowledgeBases: KnowledgeBaseConfig[],
+  knowledgeBase: KnowledgeBaseConfig,
+): void {
+  const index = knowledgeBases.findIndex((kb) => kb.name === knowledgeBase.name);
+  if (index >= 0) knowledgeBases[index] = knowledgeBase;
+  else knowledgeBases.push(knowledgeBase);
+}
+
 // Stage panels are derived from the real subagent node names so the side panel
 // matches what the graph actually runs. Hardcoding a guessed list (e.g.
 // "hunter"/"confirm") leaves stages perpetually pending because their events
@@ -432,6 +449,40 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
   const [activeWorkflowNode, setActiveWorkflowNode] = createSignal("");
   // Bumped whenever config changes so model-derived getters re-run.
   const [configVersion, setConfigVersion] = createSignal(0);
+  let pendingDraftText = "";
+  let pendingDraftReasoning = "";
+  let draftFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function clearDraftFlushTimer(): void {
+    if (draftFlushTimer) clearTimeout(draftFlushTimer);
+    draftFlushTimer = undefined;
+  }
+
+  function flushDraftBuffers(): void {
+    clearDraftFlushTimer();
+    const text = pendingDraftText;
+    const reasoning = pendingDraftReasoning;
+    pendingDraftText = "";
+    pendingDraftReasoning = "";
+    if (reasoning) setDraftReasoning((prev) => prev + reasoning);
+    if (text) setDraft((prev) => prev + text);
+  }
+
+  function scheduleDraftFlush(): void {
+    if (draftFlushTimer) return;
+    draftFlushTimer = setTimeout(() => flushDraftBuffers(), 32);
+  }
+
+  function appendDraftText(content: string, reasoning: string): void {
+    if (!content && !reasoning) return;
+    pendingDraftText += content;
+    pendingDraftReasoning += reasoning;
+    if (pendingDraftText.length + pendingDraftReasoning.length >= 2048) {
+      flushDraftBuffers();
+    } else {
+      scheduleDraftFlush();
+    }
+  }
 
   const modelName = () => {
     configVersion();
@@ -728,6 +779,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
   }
 
   function commitDraft(): void {
+    flushDraftBuffers();
     const text = draft();
     const reasoning = draftReasoning();
     if (text || reasoning) {
@@ -752,8 +804,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
           if (implicit) {
             appendSubagentStream(implicit.name, implicit.toolCallId, t, r);
           } else {
-            if (r) setDraftReasoning((prev) => prev + r);
-            if (t) setDraft((prev) => prev + t);
+            appendDraftText(t, r);
           }
         }
         break;
@@ -1061,6 +1112,9 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
   }
 
   function resetLiveTurnState(): void {
+    clearDraftFlushTimer();
+    pendingDraftText = "";
+    pendingDraftReasoning = "";
     setDraft("");
     setDraftReasoning("");
     toolStart.clear();
@@ -1282,6 +1336,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     // Idempotent: signal handlers and the normal exit path may both call this.
     if (closed) return;
     closed = true;
+    clearDraftFlushTimer();
     await session.close();
     store.close();
   }
@@ -1936,9 +1991,26 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     const server = new McpServerConfig();
     const error = applyPluginMcpDraft(server);
     if (error) return error;
+    const { McpClientPool } = await import("@/engine/mcpPool");
+    const { McpServerDTO } = await import("@/engine/dto");
     const pool = new McpClientPool();
     try {
-      const tools = await pool.connect({ [server.name]: mcpServerToDto(server).toLangchainConfig() });
+      const dto = new McpServerDTO({
+        id: null,
+        name: server.name,
+        transport: server.transport,
+        enabled: server.enabled,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        cwd: server.cwd,
+        encoding: server.encoding,
+        url: server.url,
+        headers: server.headers,
+        timeout: server.timeout,
+        sseReadTimeout: server.sseReadTimeout,
+      });
+      const tools = await pool.connect({ [server.name]: dto.toLangchainConfig() });
       return `MCP test OK: ${tools.length} tool${tools.length === 1 ? "" : "s"}`;
     } catch (exc) {
       debugLog("TUI MCP test failed", exc);
@@ -2033,6 +2105,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     const query = pluginSkillSearchQuery().trim();
     if (!query) return "Enter a SkillHub search query.";
     try {
+      const { searchSkillHub } = await import("@/resources/skillshub");
       const results = await searchSkillHub(query);
       setPluginSkillSearchRows(hydrateSkillSearchRows(results));
       setPluginSelectedIndex(0);
@@ -2051,6 +2124,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     const scope = normalizePluginScope(pluginSkillDraft.scope);
     const skillPath = skillFileForScope(scope, skillName);
     try {
+      const { installSkillFromHub } = await import("@/resources/skillshub");
       const installed = existsSync(skillPath)
         ? { name: skillName, path: skillPath, installed: false }
         : await installSkillFromHub(skillName, { targetDir: skillsDirForScope(scope) });
@@ -2501,6 +2575,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     if (!kb) return "No RAG knowledge base selected.";
     if (kb.backend === "chroma_http") return "Chroma HTTP knowledge bases are searched remotely and cannot be chunked locally.";
     try {
+      const { chunkKnowledgeBase } = await import("@/resources/rag");
       const result = await chunkKnowledgeBase(kb, config.rag);
       note(`Chunked RAG "${kb.name}": ${result.files} file(s), ${result.chunks} chunk(s) -> ${result.outputPath}`);
       return null;
@@ -2514,6 +2589,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     if (!query) return "Search query is required.";
     const topK = parseContextSize(ragSearchDraft.topK) ?? 5;
     try {
+      const { searchKnowledgeBases } = await import("@/resources/rag");
       const result = await searchKnowledgeBases(config.rag, {
         query,
         knowledgeBase: ragSearchDraft.knowledgeBase.trim(),
@@ -2796,6 +2872,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
+      const { ModelFactory } = await import("@/engine/modelFactory");
       const model = new ModelFactory().initModel(providerToDto(draft.provider), null);
       const result = await model.invoke(
         [new HumanMessage({ content: "Reply with exactly: OK" })],
@@ -3026,7 +3103,7 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
 }
 
 function providerToDto(provider: ProviderConfig): ModelProviderDTO {
-  return new ModelProviderDTO({
+  return {
     id: null,
     name: provider.name,
     modelName: provider.modelName,
@@ -3037,23 +3114,19 @@ function providerToDto(provider: ProviderConfig): ModelProviderDTO {
     topP: provider.topP,
     maxContextTokens: provider.maxContextTokens,
     enabled: provider.enabled,
-  });
-}
-
-function mcpServerToDto(server: McpServerConfig): McpServerDTO {
-  return new McpServerDTO({
-    id: null,
-    name: server.name,
-    transport: server.transport,
-    enabled: server.enabled,
-    command: server.command,
-    args: server.args,
-    env: server.env,
-    cwd: server.cwd,
-    encoding: server.encoding,
-    url: server.url,
-    headers: server.headers,
-    timeout: server.timeout,
-    sseReadTimeout: server.sseReadTimeout,
-  });
+    toDict() {
+      return {
+        id: null,
+        name: provider.name,
+        model_name: provider.modelName,
+        api_mode: provider.apiMode,
+        api_key: provider.apiKey,
+        base_url: provider.baseUrl,
+        temperature: provider.temperature,
+        top_p: provider.topP,
+        max_context_tokens: provider.maxContextTokens,
+        enabled: provider.enabled,
+      };
+    },
+  };
 }

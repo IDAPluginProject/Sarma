@@ -26,18 +26,26 @@ import { isCommand } from "@langchain/langgraph";
 import { createFilesystemMiddleware, LocalShellBackend } from "deepagents";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { AnyAgentMiddleware } from "langchain";
+import { buildPersistentTerminalMiddleware } from "@/resources/terminalTools";
+
+export interface AgentMiddlewareOptions {
+  conversationId?: string;
+}
 
 /** Build middleware that does not require a model instance. */
-export function buildAgentMiddleware(): AnyAgentMiddleware[] {
-  return buildMiddleware(null);
+export function buildAgentMiddleware(options: AgentMiddlewareOptions = {}): AnyAgentMiddleware[] {
+  return buildMiddleware(null, options);
 }
 
 /** Build LangChain v1 agent middleware that needs a model instance. */
-export function buildAgentMiddlewareForModel(model: BaseChatModel): AnyAgentMiddleware[] {
-  return buildMiddleware(model);
+export function buildAgentMiddlewareForModel(
+  model: BaseChatModel,
+  options: AgentMiddlewareOptions = {},
+): AnyAgentMiddleware[] {
+  return buildMiddleware(model, options);
 }
 
-function buildMiddleware(model: BaseChatModel | null): AnyAgentMiddleware[] {
+function buildMiddleware(model: BaseChatModel | null, options: AgentMiddlewareOptions): AnyAgentMiddleware[] {
   const workspaceRoot = process.cwd();
 
   // LocalShellBackend extends FilesystemBackend and adds `execute`. virtualMode
@@ -53,6 +61,7 @@ function buildMiddleware(model: BaseChatModel | null): AnyAgentMiddleware[] {
   const middleware: AnyAgentMiddleware[] = [
     todoListMiddleware(),
     createFilesystemMiddleware({ backend }) as unknown as AnyAgentMiddleware,
+    buildPersistentTerminalMiddleware({ conversationId: options.conversationId }),
     sarmaModelRetryMiddleware({ maxRetries: 2 }),
     toolRetryMiddleware({
       maxRetries: 2,

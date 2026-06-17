@@ -27,6 +27,7 @@ describe("middleware", () => {
     const mw = buildAgentMiddleware();
     const names = mw.map((m) => (m as { name: string }).name);
     expect(names).toContain("FilesystemMiddleware");
+    expect(names).toContain("PersistentTerminalMiddleware");
     expect(names).toContain("modelRetryMiddleware");
     expect(names).toContain("toolRetryMiddleware");
     expect(names).not.toContain("SummarizationMiddleware");
@@ -36,7 +37,7 @@ describe("middleware", () => {
     const mw = buildAgentMiddlewareForModel(model());
     const names = mw.map((m) => (m as { name: string }).name);
     expect(names).toContain("SummarizationMiddleware");
-    expect(mw.length).toBe(5);
+    expect(mw.length).toBe(6);
   });
 
   test("model retry middleware normalizes internal message objects", async () => {

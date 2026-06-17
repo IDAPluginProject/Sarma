@@ -52,6 +52,7 @@ export function buildRufloPrompt(basePrompt: string): string {
 export function buildDelegateTool(
   model: BaseChatModel,
   tools: StructuredToolInterface[],
+  options: { conversationId?: string } = {},
 ): StructuredToolInterface {
   const delegateTask = tool(
     async ({
@@ -80,7 +81,7 @@ ${SUBAGENT_RESULT_TEMPLATE}
         model,
         tools,
         systemPrompt: prompt,
-        middleware: buildAgentMiddlewareForModel(model),
+        middleware: buildAgentMiddlewareForModel(model, { conversationId: options.conversationId }),
       });
       let result: { messages?: { content?: unknown }[] };
       try {

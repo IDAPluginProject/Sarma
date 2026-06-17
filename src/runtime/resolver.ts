@@ -39,6 +39,10 @@ export interface RunPlan {
 
 /** Converts config files into the policy needed for one agent run. */
 export class RuntimePolicyResolver {
+  private availableSkillsCache: string[] | null = null;
+  private readonly skillNamesCache = new Map<string, string[]>();
+  private readonly skillDictCache = new Map<string, SkillConfigDict | null>();
+
   constructor(private readonly config: CliConfig) {}
 
   providerFor(workflow: string, subagent: string | null = null): ProviderConfig {
@@ -60,7 +64,7 @@ export class RuntimePolicyResolver {
 
   resolve(workflow: string): RunPlan {
     const subagents = subagentsForWorkflow(workflow);
-    const configuredSkill = loadSkills(this.skillNamesFor(workflow));
+    const configuredSkill = this.loadSkillDict(this.skillNamesFor(workflow));
     const skillDict =
       workflow === "audit" || workflow === "audit-slim"
         ? mergeSkillDicts(AUDIT_SKILL_DICT, configuredSkill)
@@ -72,7 +76,7 @@ export class RuntimePolicyResolver {
     const subagentMcpAllow: Record<string, string[] | null> = {};
     for (const name of subagents) {
       subagentSkills[name] = resolveSkill(
-        (loadSkills(this.skillNamesFor(workflow, name)) ?? undefined) as Record<string, unknown> | undefined,
+        (this.loadSkillDict(this.skillNamesFor(workflow, name)) ?? undefined) as Record<string, unknown> | undefined,
       );
       subagentProviders[name] = providerToDto(this.providerFor(workflow, name));
       subagentMcpAllow[name] = this.mcpAllowFor(workflow, name);
@@ -120,11 +124,31 @@ export class RuntimePolicyResolver {
   }
 
   private skillNamesFor(workflow: string, subagent: string | null = null): string[] {
+    const cacheKey = subagent ? `${workflow}\0${subagent}` : workflow;
+    const cached = this.skillNamesCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
     const agent = this.agentFor(workflow, subagent);
-    if (agent.skills.includes(WILDCARD)) {
-      return listAvailableSkills();
+    const names = agent.skills.includes(WILDCARD)
+      ? this.listAvailableSkillsCached()
+      : agent.skills.filter((name) => name !== WILDCARD);
+    this.skillNamesCache.set(cacheKey, names);
+    return names;
+  }
+
+  private listAvailableSkillsCached(): string[] {
+    if (this.availableSkillsCache === null) {
+      this.availableSkillsCache = listAvailableSkills();
     }
-    return agent.skills.filter((name) => name !== WILDCARD);
+    return this.availableSkillsCache;
+  }
+
+  private loadSkillDict(names: string[]): SkillConfigDict | null {
+    const key = JSON.stringify(names);
+    if (!this.skillDictCache.has(key)) {
+      this.skillDictCache.set(key, loadSkills(names));
+    }
+    return this.skillDictCache.get(key) ?? null;
   }
 
   private workflowServers(workflow: string, subagents: string[]): McpServerDTO[] {

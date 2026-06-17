@@ -169,6 +169,7 @@ export class AgentFactory {
           maxPriorStageTokens,
           estimateText,
           compileKwargs,
+          conversationId: config.conversationId,
         }) as unknown as CompiledAgent;
       }
 
@@ -181,17 +182,18 @@ export class AgentFactory {
         maxPriorStageTokens,
         estimateText,
         compileKwargs,
+        conversationId: config.conversationId,
       }) as unknown as CompiledAgent;
     }
 
     if (config.mode === "ruflo") {
-      const rufloTools = [...tools, buildDelegateTool(model, tools)];
+      const rufloTools = [...tools, buildDelegateTool(model, tools, { conversationId: config.conversationId })];
       const agentKwargs = this.runtimeServices?.createAgentKwargs() ?? {};
       return createAgent({
         model,
         tools: rufloTools,
         systemPrompt: config.systemPrompt || "",
-        middleware: buildAgentMiddlewareForModel(model),
+        middleware: buildAgentMiddlewareForModel(model, { conversationId: config.conversationId }),
         ...agentKwargs,
       }) as unknown as CompiledAgent;
     }
@@ -201,7 +203,7 @@ export class AgentFactory {
       model,
       tools,
       systemPrompt: config.systemPrompt || "",
-      middleware: buildAgentMiddlewareForModel(model),
+      middleware: buildAgentMiddlewareForModel(model, { conversationId: config.conversationId }),
       ...agentKwargs,
     }) as unknown as CompiledAgent;
   }
@@ -216,6 +218,7 @@ export class AgentFactory {
 
     const data = {
       mode: config.mode,
+      conversation_id: config.conversationId,
       provider: providerKey(config.provider),
       skill: skillKey(config.skill),
       servers: serverConfigs,

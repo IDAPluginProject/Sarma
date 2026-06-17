@@ -361,6 +361,7 @@ interface SubagentNodeOptions {
   subagentModels?: Record<string, BaseChatModel> | null;
   allowedMcpServers?: string[] | null;
   skill?: ResolvedSkill | null;
+  conversationId?: string;
 }
 
 type NodeFn = (
@@ -401,7 +402,7 @@ export function makeSubagentNode(
     model,
     tools,
     systemPrompt: prompt,
-    middleware: buildAgentMiddlewareForModel(model),
+    middleware: buildAgentMiddlewareForModel(model, { conversationId: options.conversationId }),
   });
 
   const node: NodeFn = async (state, config) => {
@@ -563,6 +564,7 @@ export interface BuildAuditGraphOptions {
   maxPriorStageTokens?: number;
   estimateText?: TokenEstimator;
   compileKwargs?: Record<string, unknown>;
+  conversationId?: string;
 }
 
 /** Build and compile the audit pipeline StateGraph. */
@@ -601,6 +603,7 @@ export function buildAuditGraph(
       skill: (options.subagentSkills ?? {})[name],
       maxPriorStageTokens: options.maxPriorStageTokens,
       estimateText: options.estimateText,
+      conversationId: options.conversationId,
     });
     g.addNode(name, nodeFn);
   }
