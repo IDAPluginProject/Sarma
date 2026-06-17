@@ -81,6 +81,7 @@ function RagShell(props: { controller: Controller; status: () => string; childre
       zIndex={2700}
       width={dims().width}
       height={dims().height}
+      overflow="hidden"
       backgroundColor={theme.background}
       border
       borderStyle="single"
@@ -96,8 +97,8 @@ function RagShell(props: { controller: Controller; status: () => string; childre
         <text fg={theme.textMuted}>{props.controller.ragSection()}</text>
       </box>
       {props.children as never}
-      <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker}>
+      <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker} wrapMode="none" truncate>
           {props.status() || "Esc close | left/right section | up/down select | n new | e edit | Space toggle | c chunk"}
         </text>
       </box>
@@ -167,7 +168,7 @@ function BrowseView(props: { controller: Controller; setStatus: (text: string) =
   });
 
   return (
-    <box flexGrow={1} minHeight={0} flexDirection="row">
+    <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
       <box width={18} flexShrink={0} border={["right"]} borderColor={theme.borderSubtle} paddingRight={1} flexDirection="column">
         <text fg={sectionColor(activeSection("model"))} attributes={activeSection("model") ? 1 : 0}>Model</text>
         <text fg={sectionColor(activeSection("knowledge"))} attributes={activeSection("knowledge") ? 1 : 0}>Knowledge</text>

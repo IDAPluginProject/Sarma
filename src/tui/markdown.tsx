@@ -81,8 +81,8 @@ function blockText(tokens: Token[]): string {
 function HeadingBlock(props: { token: Tokens.Heading }) {
   const marker = () => (props.token.depth <= 2 ? "" : `${"#".repeat(props.token.depth)} `);
   return (
-    <box>
-      <text fg={theme.primary} attributes={1} selectable>
+    <box minWidth={0} overflow="hidden">
+      <text fg={theme.primary} attributes={1} selectable wrapMode="word">
         {marker()}
         {inlineText(props.token.tokens, props.token.text)}
       </text>
@@ -96,8 +96,8 @@ function ParagraphBlock(props: { token: Tokens.Paragraph | Tokens.Text }) {
       ? inlineText(props.token.tokens, props.token.text)
       : inlineText(props.token.tokens, props.token.text);
   return (
-    <box>
-      <text fg={theme.text} selectable>
+    <box minWidth={0} overflow="hidden">
+      <text fg={theme.text} selectable wrapMode="word">
         {text()}
       </text>
     </box>
@@ -107,13 +107,13 @@ function ParagraphBlock(props: { token: Tokens.Paragraph | Tokens.Text }) {
 function CodeBlock(props: { token: Tokens.Code }) {
   const lang = () => (props.token.lang ? ` ${props.token.lang} ` : "");
   return (
-    <box flexDirection="column" paddingLeft={1} paddingRight={1} backgroundColor={theme.backgroundElement}>
+    <box flexDirection="column" minWidth={0} overflow="hidden" paddingLeft={1} paddingRight={1} backgroundColor={theme.backgroundElement}>
       <Show when={lang()}>
-        <text fg={theme.textWeaker} attributes={2} selectable>
+        <text fg={theme.textWeaker} attributes={2} selectable wrapMode="none" truncate>
           {lang()}
         </text>
       </Show>
-      <text fg={theme.text} selectable>
+      <text fg={theme.text} selectable wrapMode="char">
         {props.token.text}
       </text>
     </box>
@@ -129,12 +129,12 @@ function ListBlock(props: { token: Tokens.List }) {
           const marker = () =>
             props.token.ordered ? `${start() + index()}. ` : item.task ? `[${item.checked ? "x" : " "}] ` : "- ";
           return (
-            <box flexDirection="row" paddingLeft={1}>
-              <text fg={theme.primary} selectable>
+            <box flexDirection="row" minWidth={0} overflow="hidden" paddingLeft={1}>
+              <text fg={theme.primary} selectable wrapMode="none" truncate>
                 {marker()}
               </text>
               <box flexGrow={1} minWidth={0}>
-                <text fg={theme.text} selectable>
+                <text fg={theme.text} selectable wrapMode="word">
                   {blockText(item.tokens) || item.text}
                 </text>
               </box>
@@ -153,8 +153,8 @@ function QuoteBlock(props: { token: Tokens.Blockquote }) {
       .map((line) => `> ${line}`)
       .join("\n");
   return (
-    <box>
-      <text fg={theme.warning} attributes={2} selectable>
+    <box minWidth={0} overflow="hidden">
+      <text fg={theme.warning} attributes={2} selectable wrapMode="word">
         {text()}
       </text>
     </box>
@@ -168,8 +168,8 @@ function TableBlock(props: { token: Tokens.Table }) {
     return [header, ...body].join("\n");
   };
   return (
-    <box>
-      <text fg={theme.text} selectable>
+    <box minWidth={0} overflow="hidden">
+      <text fg={theme.text} selectable wrapMode="word">
         {rows()}
       </text>
     </box>
@@ -178,8 +178,8 @@ function TableBlock(props: { token: Tokens.Table }) {
 
 function HrBlock() {
   return (
-    <box>
-      <text fg={theme.dividerColor} selectable>
+    <box minWidth={0} overflow="hidden">
+      <text fg={theme.dividerColor} selectable wrapMode="none" truncate>
         {"-".repeat(40)}
       </text>
     </box>
@@ -190,8 +190,8 @@ function HtmlBlock(props: { token: Tokens.HTML | Tokens.Tag }) {
   const text = () => props.token.text.replace(/<[^>]*>/g, "").trim();
   return (
     <Show when={text()}>
-      <box>
-        <text fg={theme.text} selectable>
+      <box minWidth={0} overflow="hidden">
+        <text fg={theme.text} selectable wrapMode="word">
           {text()}
         </text>
       </box>
@@ -235,7 +235,7 @@ function SwitchBlock(props: { token: Token }) {
 export function MarkdownBody(props: MarkdownBodyProps) {
   const tokens = createMemo(() => parseMarkdown(props.content, props.streaming));
   return (
-    <box flexDirection="column" flexGrow={1} minWidth={0}>
+    <box flexDirection="column" flexGrow={1} minWidth={0} overflow="hidden">
       <For each={tokens()}>{(token) => <MarkdownBlock token={token} />}</For>
     </box>
   );

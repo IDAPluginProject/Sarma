@@ -95,6 +95,7 @@ export function GraphPanel(props: { controller: Controller }) {
       zIndex={2540}
       width={dims().width}
       height={dims().height}
+      overflow="hidden"
       backgroundColor={theme.background}
       border
       borderStyle="single"
@@ -110,7 +111,7 @@ export function GraphPanel(props: { controller: Controller }) {
         <text fg={theme.textMuted}>{graph().workflow}</text>
       </box>
 
-      <box flexGrow={1} minHeight={0} flexDirection="row">
+      <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
         <box flexGrow={1} minWidth={0} flexDirection="column" paddingRight={2}>
           <text fg={theme.textWeaker} attributes={1}>Workflow Graph</text>
           <For each={graph().nodes}>
@@ -159,8 +160,8 @@ export function GraphPanel(props: { controller: Controller }) {
         </box>
       </box>
 
-      <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-        <text fg={theme.textWeaker}>Esc close | w workflow</text>
+      <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+        <text fg={theme.textWeaker} wrapMode="none" truncate>Esc close | w workflow</text>
       </box>
     </box>
   );

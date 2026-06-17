@@ -134,6 +134,10 @@ export class McpServerDTO {
     if (transport === "stdio") {
       config.command = this.command;
       config.args = parseJson<unknown[]>(this.args, []) ?? [];
+      // The MCP SDK defaults stderr to "inherit", which lets server startup
+      // logs write directly into the TUI screen. Drop stderr unless Sarma grows
+      // an explicit log capture surface for it.
+      config.stderr = "ignore";
       if (this.env) {
         const env = parseJson<Record<string, string>>(this.env, undefined);
         if (env !== undefined) config.env = env;

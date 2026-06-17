@@ -73,6 +73,7 @@ function PluginShell(props: { controller: Controller; status: () => string; chil
       zIndex={2800}
       width={dims().width}
       height={dims().height}
+      overflow="hidden"
       backgroundColor={theme.background}
       border
       borderStyle="single"
@@ -88,8 +89,8 @@ function PluginShell(props: { controller: Controller; status: () => string; chil
         <text fg={theme.textMuted}>{props.controller.pluginSection() === "mcp" ? "MCP" : "Skills"}</text>
       </box>
       {props.children as never}
-      <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker}>
+      <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker} wrapMode="none" truncate>
           {props.status() || "Esc close | left/right section | up/down select | Space toggle | n search/add | e edit"}
         </text>
       </box>
@@ -158,13 +159,13 @@ function BrowseView(props: { controller: Controller; setStatus: (text: string) =
   });
 
   return (
-    <box flexGrow={1} minHeight={0} flexDirection="row">
+    <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
       <box width={18} flexShrink={0} border={["right"]} borderColor={theme.borderSubtle} paddingRight={1} flexDirection="column">
         <text fg={sectionColor(activeSection("mcp"))} attributes={activeSection("mcp") ? 1 : 0}>MCP</text>
         <text fg={sectionColor(activeSection("skills"))} attributes={activeSection("skills") ? 1 : 0}>Skills</text>
       </box>
 
-      <box flexGrow={1} minWidth={0} paddingLeft={2} flexDirection="column">
+      <box flexGrow={1} minWidth={0} overflow="hidden" paddingLeft={2} flexDirection="column">
         <Show
           when={c.pluginSection() === "mcp"}
           fallback={
@@ -310,7 +311,7 @@ function McpFields(props: { controller: Controller; setStatus: (text: string) =>
   });
 
   return (
-    <box flexGrow={1} minHeight={0} flexDirection="column">
+    <box flexGrow={1} minHeight={0} minWidth={0} overflow="hidden" flexDirection="column">
       <text fg={theme.textWeaker} attributes={1}>MCP Server</text>
       <For each={fields()}>
         {(field, i) => {

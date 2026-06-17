@@ -393,6 +393,7 @@ function SubagentDetailPanel(props: {
           zIndex={2560}
           width={dims().width}
           height={dims().height}
+          overflow="hidden"
           backgroundColor={theme.background}
           border
           borderStyle="single"
@@ -489,8 +490,8 @@ function SubagentDetailPanel(props: {
               </Show>
             </box>
           </scrollbox>
-          <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-            <text fg={theme.textWeaker}>Esc close</text>
+          <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+            <text fg={theme.textWeaker} wrapMode="none" truncate>Esc close</text>
           </box>
         </box>
       )}
@@ -1103,6 +1104,7 @@ export function App(props: { controller: Controller; onExit: () => void }) {
       flexDirection="row"
       width="100%"
       height="100%"
+      overflow="hidden"
       backgroundColor={theme.background}
       focusable
       on:focused={focusInput}
@@ -1113,6 +1115,7 @@ export function App(props: { controller: Controller; onExit: () => void }) {
         flexDirection="column"
         minWidth={0}
         height="100%"
+        overflow="hidden"
         backgroundColor={theme.background}
         focusable
         on:focused={focusInput}

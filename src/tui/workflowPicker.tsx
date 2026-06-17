@@ -66,6 +66,7 @@ export function WorkflowPicker(props: { controller: Controller }) {
       zIndex={2550}
       width={dims().width}
       height={dims().height}
+      overflow="hidden"
       backgroundColor={theme.background}
       border
       borderStyle="single"
@@ -83,7 +84,7 @@ export function WorkflowPicker(props: { controller: Controller }) {
         <text fg={theme.textMuted}>Select active workflow</text>
       </box>
 
-      <box flexGrow={1} minHeight={0} flexDirection="column">
+      <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="column">
         <Show
           when={rows().length > 0}
           fallback={<text fg={theme.textWeaker}>No workflows configured.</text>}
@@ -107,8 +108,8 @@ export function WorkflowPicker(props: { controller: Controller }) {
         </Show>
       </box>
 
-      <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-        <text fg={status().startsWith("Error:") ? theme.error : theme.textWeaker}>{status()}</text>
+      <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+        <text fg={status().startsWith("Error:") ? theme.error : theme.textWeaker} wrapMode="none" truncate>{status()}</text>
       </box>
     </box>
   );

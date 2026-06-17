@@ -26,6 +26,7 @@ describe("McpServerDTO.toLangchainConfig", () => {
     expect(cfg.args).toEqual(["--port", "7000"]);
     expect(cfg.env).toEqual({ KEY: "val" });
     expect(cfg.cwd).toBe("/work");
+    expect(cfg.stderr).toBe("ignore");
     // utf-8 default is omitted
     expect(cfg.encoding).toBeUndefined();
   });

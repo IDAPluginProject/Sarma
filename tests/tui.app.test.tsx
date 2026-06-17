@@ -1347,6 +1347,33 @@ describe("TUI App", () => {
     expect(t.captureCharFrame()).not.toContain("ida (3 tools)");
   });
 
+  test("plugin MCP test status is clipped to the panel", async () => {
+    const longTail = "x".repeat(220);
+    const t = await renderTui(
+      () =>
+        App({
+          controller: mockController({
+            busy: () => false,
+            items: [],
+            pluginOpen: () => true,
+            pluginStep: () => "mcp-fields",
+            testPluginMcp: async () => `MCP test OK: ${longTail}`,
+          }),
+          onExit: () => {},
+        }),
+      { width: 72, height: 18 },
+    );
+    await t.renderOnce();
+
+    t.mockInput.pressKey("t", { ctrl: true });
+    await t.renderOnce();
+    await t.renderOnce();
+
+    const frame = t.captureCharFrame();
+    expect(frame).toContain("MCP test OK:");
+    expect(frame).not.toContain(longTail);
+  });
+
   test("renders model picker as a TUI selection window", async () => {
     const t = await renderTui(
       () =>

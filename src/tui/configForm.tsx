@@ -58,6 +58,7 @@ function ConfigShell(props: { controller: Controller; status: () => string; chil
       zIndex={3000}
       width={dims().width}
       height={dims().height}
+      overflow="hidden"
       backgroundColor={theme.background}
       border
       borderStyle="single"
@@ -73,8 +74,8 @@ function ConfigShell(props: { controller: Controller; status: () => string; chil
         <text fg={theme.textMuted}>{sectionLabel(props.controller.configSection())}</text>
       </box>
       {props.children as never}
-      <box flexShrink={0} border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
-        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker}>
+      <box flexShrink={0} minWidth={0} height={3} overflow="hidden" border={["top"]} borderColor={theme.borderSubtle} paddingTop={1}>
+        <text fg={props.status().startsWith("Error:") ? theme.error : theme.textWeaker} wrapMode="none" truncate>
           {props.status() || "Esc close | Ctrl-S save | Enter edit | n new | d delete | a active | left/right section"}
         </text>
       </box>
@@ -135,7 +136,7 @@ function BrowseView(props: { controller: Controller; setStatus: (text: string) =
   });
 
   return (
-    <box flexGrow={1} minHeight={0} flexDirection="row">
+    <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
       <box width={18} flexShrink={0} border={["right"]} borderColor={theme.borderSubtle} paddingRight={1} flexDirection="column">
         <text fg={sectionColor("models")} attributes={c.configSection() === "models" ? 1 : 0}>Models</text>
         <text fg={sectionColor("workflow")} attributes={c.configSection() === "workflow" ? 1 : 0}>Workflow</text>
