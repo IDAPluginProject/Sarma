@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exchangeHttp, exchangePacket } from "@/resources/networkTools";
-import { buildWebSearchTool } from "@/resources/webTools";
+import { buildFetchUrlTool, buildWebSearchTool, fetchUrlContent } from "@/resources/webTools";
 import { buildHttpExchangeTool, buildPacketExchangeTool } from "@/resources/networkTools";
 import { buildPersistentTerminalTools, PersistentTerminalManager } from "@/resources/terminalTools";
 
@@ -12,6 +12,7 @@ describe("network tool construction", () => {
     expect(buildHttpExchangeTool().name).toBe("http_exchange");
     expect(buildPacketExchangeTool().name).toBe("packet_exchange");
     expect(buildWebSearchTool().name).toBe("web_search");
+    expect(buildFetchUrlTool().name).toBe("fetch_url");
     expect(buildPersistentTerminalTools().map((t) => t.name)).toEqual([
       "terminal_start",
       "terminal_write",
@@ -26,6 +27,47 @@ describe("network tool construction", () => {
     // only aim them at authorized targets.
     expect(buildHttpExchangeTool().description.toLowerCase()).toContain("authorized");
     expect(buildPacketExchangeTool().description.toLowerCase()).toContain("authorized");
+  });
+});
+
+describe("fetchUrlContent", () => {
+  test("rejects unsupported schemes", async () => {
+    const out = await fetchUrlContent({ url: "file:///etc/passwd" });
+    expect(out).toContain("scheme must be http or https");
+  });
+
+  test("fetches and extracts readable HTML from a URL", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          `<!doctype html>
+          <html>
+            <head><title>Example Page</title><style>.x{display:none}</style></head>
+            <body>
+              <h1>Example Heading</h1>
+              <p>Hello <strong>world</strong>.</p>
+              <script>ignored()</script>
+              <a href="/next">Next page</a>
+            </body>
+          </html>`,
+          { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+        ),
+    });
+    try {
+      const out = await fetchUrlContent({
+        url: `http://127.0.0.1:${server.port}/`,
+        maxChars: 5000,
+      });
+      expect(out).toContain("status=200 OK");
+      expect(out).toContain("title=Example Page");
+      expect(out).toContain("Example Heading");
+      expect(out).toContain("Hello world.");
+      expect(out).not.toContain("ignored()");
+      expect(out).toContain(`URL: http://127.0.0.1:${server.port}/next`);
+    } finally {
+      server.stop(true);
+    }
   });
 });
 

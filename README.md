@@ -25,8 +25,8 @@ server.
 - `/plugin` MCP and skill configuration TUI, with local/global install scope.
 - SkillHub search/install support from `https://www.skillhub.club` by default.
 - `/rag` RAG configuration TUI and `sarma rag` CLI for local knowledge bases.
-- Built-in `rag_search`, `web_search`, `http_exchange`, and `packet_exchange`
-  tools mounted on existing agents.
+- Built-in `rag_search`, `web_search`, `fetch_url`, `http_exchange`, and
+  `packet_exchange` tools mounted on existing agents.
 - Context compaction based on each model profile's configured context window.
 - Workspace session database with `sarma sessions` and `sarma resume <id>`.
 
@@ -348,7 +348,9 @@ enabled = true
 ## Plugins And Skills
 
 Use `/plugin` to manage both MCP servers and skills. New MCP and skill entries
-can be saved to workspace scope or global scope.
+can be saved to workspace scope or global scope. Skill install defaults to
+Upload mode for a local `.zip` containing one `SKILL.md`; the same panel can
+switch to Search mode for SkillHub installs.
 
 Skills can be added manually by placing a `SKILL.md` file under:
 
@@ -393,6 +395,7 @@ When at least one knowledge base is enabled, Sarma attaches a built-in
 | --- | --- |
 | `rag_search` | Search enabled RAG knowledge bases |
 | `web_search` | Search the public web for compact titles, URLs, and snippets |
+| `fetch_url` | Fetch an HTTP/HTTPS URL and return readable page content |
 | `http_exchange` | Send HTTP/HTTPS requests to a target host, port, path, and method |
 | `packet_exchange` | Send raw TCP, UDP, or TLS payloads and capture the response |
 
@@ -402,7 +405,7 @@ When at least one knowledge base is enabled, Sarma attaches a built-in
 Built-in tools are independent from MCP server selection. Workflow `mcp`
 allowlists and skill tool allow/deny lists filter MCP-provided tools before
 these local tools are appended; they do not disable `rag_search`, `web_search`,
-`http_exchange`, or `packet_exchange`.
+`fetch_url`, `http_exchange`, or `packet_exchange`.
 
 ## Context And State
 

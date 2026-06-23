@@ -9,7 +9,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { HumanMessage } from "@langchain/core/messages";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -157,7 +157,9 @@ export interface PluginMcpDraft {
 }
 
 export interface PluginSkillDraft {
+  mode: string;
   name: string;
+  path: string;
   prompt: string;
   enabled: string;
   scope: string;
@@ -561,7 +563,9 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     scope: "local",
   });
   const [pluginSkillDraft, setPluginSkillDraft] = createStore<PluginSkillDraft>({
+    mode: "upload",
     name: "",
+    path: "",
     prompt: "",
     enabled: "true",
     scope: "local",
@@ -2055,7 +2059,9 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     setPluginSkillSearchQuerySig("");
     setPluginSkillSearchRows([]);
     setPluginSkillDraft({
+      mode: "upload",
       name: "",
+      path: "",
       prompt: "",
       enabled: "true",
       scope: "local",
@@ -2074,19 +2080,27 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
 
   async function savePluginSkill(): Promise<string | null> {
     if (busy()) return "Cannot change plugins while a turn is running.";
+    if (pluginSkillDraft.mode !== "upload") return "Switch to Upload mode to install a local skill zip.";
     const name = pluginSkillDraft.name.trim();
-    const prompt = pluginSkillDraft.prompt.trim();
-    if (!name) return "Skill name is required.";
-    if (!validPluginName(name)) return "Skill name may only contain letters, numbers, dot, dash, and underscore.";
-    if (!prompt) return "Skill prompt is required.";
-    const dir = join(skillsDirForScope(pluginSkillDraft.scope), name);
-    if (existsSync(dir)) return `Skill directory already exists: ${dir}`;
+    const zipPath = pluginSkillDraft.path.trim();
+    if (name && !validPluginName(name)) return "Skill name may only contain letters, numbers, dot, dash, and underscore.";
+    if (!zipPath) return "Skill zip path is required.";
+    const scope = normalizePluginScope(pluginSkillDraft.scope);
+    let installedName = name;
+    let installedPath = "";
+    let installedNow = false;
     try {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "SKILL.md"), `${prompt}\n`, "utf-8");
+      const { installSkillFromZip } = await import("@/resources/skills");
+      const installed = installSkillFromZip(zipPath, {
+        targetDir: skillsDirForScope(scope),
+        name: name || undefined,
+      });
+      installedName = installed.name;
+      installedPath = installed.path;
+      installedNow = installed.installed;
       if (parseBool(pluginSkillDraft.enabled)) {
         const agent = agentForCurrentWorkflow();
-        if (!agent.skills.includes(name)) agent.skills.push(name);
+        if (!agent.skills.includes(installedName)) agent.skills.push(installedName);
         saveAgents(config);
       }
     } catch (exc) {
@@ -2095,9 +2109,9 @@ export function createController(config: CliConfig, workflowNames: string[]): Co
     await restartRuntime();
     setConfigVersion((v) => v + 1);
     setPluginStep("browse");
-    const idx = pluginSkillRows().findIndex((row) => row.name === name);
+    const idx = pluginSkillRows().findIndex((row) => row.name === installedName);
     if (idx >= 0) setPluginSelectedIndex(idx);
-    note(`Saved skill "${name}" -> ${join(dir, "SKILL.md")}`);
+    note(`${installedNow ? "Uploaded" : "Enabled"} skill "${installedName}" -> ${installedPath}`);
     return null;
   }
 

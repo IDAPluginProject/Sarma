@@ -1,5 +1,5 @@
 import { expect, test, describe, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,7 +17,7 @@ import {
   CliConfig,
   WILDCARD,
 } from "@/config";
-import { loadSkill, loadSkills, listAvailableSkills } from "@/resources/skills";
+import { installSkillFromZip, loadSkill, loadSkills, listAvailableSkills } from "@/resources/skills";
 import { Store } from "@/store";
 import * as paths from "@/paths";
 
@@ -229,6 +229,29 @@ describe("skills", () => {
     expect(listAvailableSkills().sort()).toEqual(["a", "b"]);
   });
 
+  test("installSkillFromZip validates and installs a local skill archive", () => {
+    const zipPath = join(tmpCwd, "web-audit.zip");
+    writeStoredZip(zipPath, {
+      "web-audit/SKILL.md": "Audit web applications carefully.",
+      "web-audit/references/checklist.md": "Checklist",
+    });
+
+    const installed = installSkillFromZip(zipPath, { targetDir: join(tmpHome, "skills") });
+    expect(installed).toEqual({
+      name: "web-audit",
+      path: join(tmpHome, "skills", "web-audit", "SKILL.md"),
+      installed: true,
+    });
+    expect(readFileSync(join(tmpHome, "skills", "web-audit", "SKILL.md"), "utf-8")).toContain("Audit web applications carefully.");
+    expect(readFileSync(join(tmpHome, "skills", "web-audit", "references", "checklist.md"), "utf-8")).toBe("Checklist");
+  });
+
+  test("installSkillFromZip rejects unsafe archives", () => {
+    const zipPath = join(tmpCwd, "bad.zip");
+    writeStoredZip(zipPath, { "../SKILL.md": "bad" });
+    expect(() => installSkillFromZip(zipPath, { targetDir: join(tmpHome, "skills"), name: "bad" })).toThrow("Invalid zip entry path");
+  });
+
   test("loadSkills merges multiple", () => {
     writeSkill("s1", 'tools_allow: ["x"]', "P1");
     writeSkill("s2", 'tools_allow: ["y"]', "P2");
@@ -244,6 +267,60 @@ describe("skills", () => {
     expect(loadSkills(["nope"])).toBeNull();
   });
 });
+
+function writeStoredZip(zipPath: string, files: Record<string, string>): void {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const nameBytes = Buffer.from(name, "utf-8");
+    const data = Buffer.from(content, "utf-8");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(0, 10);
+    local.writeUInt32LE(0, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    local.writeUInt16LE(0, 28);
+    localParts.push(local, nameBytes, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(0, 12);
+    central.writeUInt32LE(0, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, nameBytes);
+    offset += local.length + nameBytes.length + data.length;
+  }
+
+  const centralDir = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(Object.keys(files).length, 8);
+  eocd.writeUInt16LE(Object.keys(files).length, 10);
+  eocd.writeUInt32LE(centralDir.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+  writeFileSync(zipPath, Buffer.concat([...localParts, centralDir, eocd]));
+}
 
 describe("Store", () => {
   test("conversation + message lifecycle", () => {

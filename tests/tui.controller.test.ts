@@ -47,6 +47,61 @@ afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
+function writeStoredZip(zipPath: string, files: Record<string, string>): void {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const nameBytes = Buffer.from(name, "utf-8");
+    const data = Buffer.from(content, "utf-8");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(0, 10);
+    local.writeUInt32LE(0, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    local.writeUInt16LE(0, 28);
+    localParts.push(local, nameBytes, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(0, 12);
+    central.writeUInt32LE(0, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, nameBytes);
+    offset += local.length + nameBytes.length + data.length;
+  }
+
+  const centralDir = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  const count = Object.keys(files).length;
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(count, 8);
+  eocd.writeUInt16LE(count, 10);
+  eocd.writeUInt32LE(centralDir.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+  writeFileSync(zipPath, Buffer.concat([...localParts, centralDir, eocd]));
+}
+
 describe("TUI controller model config", () => {
   test("starts with no model and reports hasModel() false", async () => {
     await new Promise<void>((resolve, reject) => {
@@ -1666,8 +1721,12 @@ describe("TUI controller migrated Python slash-command helpers", () => {
             c.setPluginSection("skills");
             c.newPluginSkill();
             expect(c.pluginStep()).toBe("skill-fields");
-            c.setPluginSkillField("name", "web-audit");
-            c.setPluginSkillField("prompt", "Audit web applications carefully.");
+            expect(c.pluginSkillDraft.mode).toBe("upload");
+            const zipPath = join(workspace, "web-audit.zip");
+            writeStoredZip(zipPath, {
+              "web-audit/SKILL.md": "Audit web applications carefully.",
+            });
+            c.setPluginSkillField("path", zipPath);
             c.setPluginSkillField("enabled", "true");
             expect(await c.savePluginSkill()).toBeNull();
 
@@ -1719,6 +1778,7 @@ describe("TUI controller migrated Python slash-command helpers", () => {
               c.openPlugin();
               c.setPluginSection("skills");
               c.newPluginSkill();
+              c.setPluginSkillField("mode", "search");
               c.setPluginSkillSearchQuery("ida");
               c.setPluginSkillField("scope", "global");
               expect(await c.searchPluginSkills()).toBeNull();

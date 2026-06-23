@@ -14,6 +14,7 @@ interface FieldDef<T> {
 }
 
 const MCP_TRANSPORTS = ["http", "sse", "stdio"] as const;
+const SKILL_MODES = ["upload", "search"] as const;
 
 const MCP_COMMON_FIELDS: FieldDef<PluginMcpDraft>[] = [
   { key: "name", label: "Name", hint: "mcp.toml [[mcp_servers]].name", placeholder: "ida" },
@@ -171,7 +172,7 @@ function BrowseView(props: { controller: Controller; setStatus: (text: string) =
           fallback={
             <box flexDirection="column">
               <text fg={theme.textWeaker} attributes={1}>Installed Skills</text>
-              <Show when={skillRows().length > 0} fallback={<text fg={theme.textWeaker}>No skills installed. Press n to search SkillHub.</text>}>
+              <Show when={skillRows().length > 0} fallback={<text fg={theme.textWeaker}>No skills installed. Press n to upload or search.</text>}>
                 <For each={skillRows()}>
                   {(row, i) => (
                     <box flexDirection="column" paddingBottom={1}>
@@ -409,10 +410,28 @@ function SkillFields(props: { controller: Controller; setStatus: (text: string) 
   const [searching, setSearching] = createSignal(false);
   const [installing, setInstalling] = createSignal(false);
   const rows = () => c.pluginSkillSearchRows();
-  const itemCount = () => 3 + rows().length;
+  const isSearch = () => c.pluginSkillDraft.mode === "search";
+  const resultStart = () => 5;
+  const uploadActionIndex = () => 5;
+  const searchActionIndex = () => 4;
+  const itemCount = () => (isSearch() ? resultStart() + rows().length : uploadActionIndex() + 1);
   const move = (delta: number) => setFocusIdx((idx) => (idx + delta + itemCount()) % itemCount());
+  const setMode = (mode: "upload" | "search") => {
+    c.setPluginSkillField("mode", mode);
+    setFocusIdx(0);
+  };
+  const toggleMode = () => setMode(isSearch() ? "upload" : "search");
   const toggleEnabled = () => c.setPluginSkillField("enabled", c.pluginSkillDraft.enabled === "true" ? "false" : "true");
   const toggleScope = () => c.setPluginSkillField("scope", c.pluginSkillDraft.scope === "global" ? "local" : "global");
+
+  const upload = async () => {
+    if (installing()) return;
+    setInstalling(true);
+    props.setStatus("Uploading skill...");
+    const err = await c.savePluginSkill();
+    setInstalling(false);
+    props.setStatus(err ? `Error: ${err}` : "Skill uploaded.");
+  };
 
   const search = async () => {
     if (searching()) return;
@@ -421,7 +440,7 @@ function SkillFields(props: { controller: Controller; setStatus: (text: string) 
     const err = await c.searchPluginSkills();
     setSearching(false);
     props.setStatus(err ? `Error: ${err}` : `Found ${rows().length} skill${rows().length === 1 ? "" : "s"}.`);
-    if (!err && rows().length > 0) setFocusIdx(3);
+    if (!err && rows().length > 0) setFocusIdx(resultStart());
   };
 
   const install = async (name: string) => {
@@ -451,48 +470,186 @@ function SkillFields(props: { controller: Controller; setStatus: (text: string) 
       consumeKey(key);
       return move(1);
     }
-    if (focusIdx() === 1 && (key.name === "left" || key.name === "right" || key.name === "space")) {
+    if (focusIdx() === 0 && (key.name === "left" || key.name === "right" || key.name === "space")) {
+      consumeKey(key);
+      return toggleMode();
+    }
+    if (focusIdx() === (isSearch() ? 2 : 3) && (key.name === "left" || key.name === "right" || key.name === "space")) {
       consumeKey(key);
       return toggleEnabled();
     }
-    if (focusIdx() === 2 && (key.name === "left" || key.name === "right" || key.name === "space")) {
+    if (focusIdx() === (isSearch() ? 3 : 4) && (key.name === "left" || key.name === "right" || key.name === "space")) {
       consumeKey(key);
       return toggleScope();
     }
     if ((key.ctrl && key.name === "s") || key.name === "return" || key.name === "enter") {
       consumeKey(key);
-      if (focusIdx() === 0) return void search();
-      if (focusIdx() === 1) return toggleEnabled();
-      if (focusIdx() === 2) return toggleScope();
-      const row = rows()[focusIdx() - 3];
+      if (focusIdx() === 0) return toggleMode();
+      if (!isSearch()) {
+        if (focusIdx() === 3) return toggleEnabled();
+        if (focusIdx() === 4) return toggleScope();
+        return void upload();
+      }
+      if (focusIdx() === 1 || focusIdx() === searchActionIndex()) return void search();
+      if (focusIdx() === 2) return toggleEnabled();
+      if (focusIdx() === 3) return toggleScope();
+      const row = rows()[focusIdx() - resultStart()];
       if (row) return void install(row.name);
     }
   });
 
   return (
     <box flexGrow={1} minHeight={0} flexDirection="column">
-      <text fg={theme.textWeaker} attributes={1}>SkillHub Search</text>
+      <text fg={theme.textWeaker} attributes={1}>Skill Install</text>
       <box flexDirection="column" paddingTop={1}>
         <box flexDirection="row">
           <text fg={focusIdx() === 0 ? theme.primary : theme.textMuted} attributes={focusIdx() === 0 ? 1 : 0}>
-            {focusIdx() === 0 ? "> " : "  "}Query
+            {focusIdx() === 0 ? "> " : "  "}Mode
           </text>
-          <text fg={theme.textWeaker}>  search SkillHub by name or description</text>
+          <text fg={theme.textWeaker}>  upload a local zip or search SkillHub</text>
         </box>
-        <box paddingLeft={2}>
-          <input
-            value={c.pluginSkillSearchQuery()}
-            focused={focusIdx() === 0}
-            onInput={(v: string) => c.setPluginSkillSearchQuery(v)}
-            placeholder="idapython"
-            focusedBackgroundColor={theme.backgroundElement}
-          />
+        <box paddingLeft={2} flexDirection="row">
+          <text fg={theme.textWeaker}>{"< "}</text>
+          <For each={SKILL_MODES}>
+            {(mode) => {
+              const selected = () => c.pluginSkillDraft.mode === mode;
+              return (
+                <text fg={selected() ? theme.primary : theme.textWeaker} attributes={selected() ? 1 : 0}>
+                  {selected() ? `[${mode}]` : mode}{"  "}
+                </text>
+              );
+            }}
+          </For>
+          <text fg={theme.textWeaker}>{">"}</text>
         </box>
       </box>
+      <Show
+        when={isSearch()}
+        fallback={
+          <>
+            <SkillTextField
+              active={focusIdx() === 1}
+              label="Zip Path"
+              hint="local .zip containing one SKILL.md"
+              value={c.pluginSkillDraft.path}
+              placeholder="C:\\path\\skills.zip"
+              onInput={(v) => c.setPluginSkillField("path", v)}
+            />
+            <SkillTextField
+              active={focusIdx() === 2}
+              label="Name"
+              hint="optional; required when SKILL.md is at zip root"
+              value={c.pluginSkillDraft.name}
+              placeholder="idapython"
+              onInput={(v) => c.setPluginSkillField("name", v)}
+            />
+            <SkillToggleRows
+              controller={c}
+              enableFocused={focusIdx() === 3}
+              scopeFocused={focusIdx() === 4}
+            />
+            <box paddingTop={1} flexDirection="row">
+              <text fg={installing() ? theme.primary : theme.textWeaker} attributes={1}>
+                {focusIdx() === uploadActionIndex() ? "> " : "  "}[ Enter Upload ]
+              </text>
+              <text fg={theme.textWeaker}>  validates and installs the local skill zip</text>
+            </box>
+          </>
+        }
+      >
+        <>
+          <SkillTextField
+            active={focusIdx() === 1}
+            label="Query"
+            hint="search SkillHub by name or description"
+            value={c.pluginSkillSearchQuery()}
+            placeholder="idapython"
+            onInput={(v) => c.setPluginSkillSearchQuery(v)}
+          />
+          <SkillToggleRows
+            controller={c}
+            enableFocused={focusIdx() === 2}
+            scopeFocused={focusIdx() === 3}
+          />
+          <box paddingTop={1} flexDirection="row">
+            <text fg={searching() ? theme.primary : theme.textWeaker} attributes={1}>
+              {focusIdx() === searchActionIndex() ? "> " : "  "}[ Enter Search ]
+            </text>
+            <text fg={theme.textWeaker}>  select a result and press Enter to install</text>
+          </box>
+          <Show when={rows().length > 0}>
+            <box paddingTop={1} flexDirection="column">
+              <text fg={theme.textWeaker} attributes={1}>Results</text>
+              <For each={rows()}>
+                {(row, i) => {
+                  const active = () => focusIdx() === i() + resultStart();
+                  return (
+                    <box flexDirection="column" paddingBottom={1}>
+                      <box flexDirection="row">
+                        <text fg={active() ? theme.primary : theme.text} attributes={active() ? 1 : 0}>
+                          {active() ? "> " : "  "}{row.name}
+                        </text>
+                        <text fg={row.installed ? theme.success : theme.textWeaker}>  {row.installed ? "installed" : "available"}</text>
+                        <text fg={row.enabled ? theme.success : theme.textWeaker}>  {row.enabled ? "enabled" : "disabled"}</text>
+                      </box>
+                      <Show when={row.description}>
+                        <text fg={theme.textWeaker}>    {row.description}</text>
+                      </Show>
+                    </box>
+                  );
+                }}
+              </For>
+            </box>
+          </Show>
+        </>
+      </Show>
+      <Show when={installing()}>
+        <box paddingTop={1}><text fg={theme.primary}>installing...</text></box>
+      </Show>
+      <box paddingTop={1}>
+        <text fg={theme.textWeaker}>Upload installs zip content into .sarma/skills/name. Search installs SkillHub results.</text>
+      </box>
+    </box>
+  );
+}
+
+function SkillTextField(props: {
+  active: boolean;
+  label: string;
+  hint: string;
+  value: string;
+  placeholder: string;
+  onInput: (value: string) => void;
+}) {
+  return (
+    <box flexDirection="column" paddingTop={1}>
+      <box flexDirection="row">
+        <text fg={props.active ? theme.primary : theme.textMuted} attributes={props.active ? 1 : 0}>
+          {props.active ? "> " : "  "}{props.label}
+        </text>
+        <text fg={theme.textWeaker}>  {props.hint}</text>
+      </box>
+      <box paddingLeft={2}>
+        <input
+          value={props.value}
+          focused={props.active}
+          onInput={props.onInput}
+          placeholder={props.placeholder}
+          focusedBackgroundColor={theme.backgroundElement}
+        />
+      </box>
+    </box>
+  );
+}
+
+function SkillToggleRows(props: { controller: Controller; enableFocused: boolean; scopeFocused: boolean }) {
+  const c = props.controller;
+  return (
+    <>
       <box flexDirection="column" paddingTop={1}>
         <box flexDirection="row">
-          <text fg={focusIdx() === 1 ? theme.primary : theme.textMuted} attributes={focusIdx() === 1 ? 1 : 0}>
-            {focusIdx() === 1 ? "> " : "  "}Enable
+          <text fg={props.enableFocused ? theme.primary : theme.textMuted} attributes={props.enableFocused ? 1 : 0}>
+            {props.enableFocused ? "> " : "  "}Enable
           </text>
           <text fg={theme.textWeaker}>  enable for current workflow after install</text>
         </box>
@@ -509,8 +666,8 @@ function SkillFields(props: { controller: Controller; setStatus: (text: string) 
       </box>
       <box flexDirection="column" paddingTop={1}>
         <box flexDirection="row">
-          <text fg={focusIdx() === 2 ? theme.primary : theme.textMuted} attributes={focusIdx() === 2 ? 1 : 0}>
-            {focusIdx() === 2 ? "> " : "  "}Scope
+          <text fg={props.scopeFocused ? theme.primary : theme.textMuted} attributes={props.scopeFocused ? 1 : 0}>
+            {props.scopeFocused ? "> " : "  "}Scope
           </text>
           <text fg={theme.textWeaker}>  install into workspace or global skills directory</text>
         </box>
@@ -525,41 +682,7 @@ function SkillFields(props: { controller: Controller; setStatus: (text: string) 
           <text fg={theme.textWeaker}>{" >"}</text>
         </box>
       </box>
-      <box paddingTop={1} flexDirection="row">
-        <text fg={searching() ? theme.primary : theme.textWeaker} attributes={1}>[ Enter Search ]</text>
-        <text fg={theme.textWeaker}>  select a result and press Enter to install</text>
-      </box>
-      <Show when={rows().length > 0}>
-        <box paddingTop={1} flexDirection="column">
-          <text fg={theme.textWeaker} attributes={1}>Results</text>
-          <For each={rows()}>
-            {(row, i) => {
-              const active = () => focusIdx() === i() + 3;
-              return (
-                <box flexDirection="column" paddingBottom={1}>
-                  <box flexDirection="row">
-                    <text fg={active() ? theme.primary : theme.text} attributes={active() ? 1 : 0}>
-                      {active() ? "> " : "  "}{row.name}
-                    </text>
-                    <text fg={row.installed ? theme.success : theme.textWeaker}>  {row.installed ? "installed" : "available"}</text>
-                    <text fg={row.enabled ? theme.success : theme.textWeaker}>  {row.enabled ? "enabled" : "disabled"}</text>
-                  </box>
-                  <Show when={row.description}>
-                    <text fg={theme.textWeaker}>    {row.description}</text>
-                  </Show>
-                </box>
-              );
-            }}
-          </For>
-        </box>
-      </Show>
-      <Show when={installing()}>
-        <box paddingTop={1}><text fg={theme.primary}>installing...</text></box>
-      </Show>
-      <box paddingTop={1}>
-        <text fg={theme.textWeaker}>Installs SkillHub results into .sarma/skills/name/SKILL.md.</text>
-      </box>
-    </box>
+    </>
   );
 }
 

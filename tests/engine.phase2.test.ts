@@ -239,7 +239,7 @@ describe("AgentFactory tool policy", () => {
         skill,
       }),
     );
-    expect(tools.map((t) => t.name)).toEqual(["web_search", "http_exchange", "packet_exchange"]);
+    expect(tools.map((t) => t.name)).toEqual(["web_search", "fetch_url", "http_exchange", "packet_exchange"]);
   });
 
   test("RAG path changes invalidate cached agents", async () => {

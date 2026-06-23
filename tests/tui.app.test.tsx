@@ -214,7 +214,9 @@ function mockController(over: Partial<Controller> = {}): Controller {
     savePluginMcp: async () => null,
     newPluginSkill: () => {},
     pluginSkillDraft: {
+      mode: "upload",
       name: "idapython",
+      path: "",
       prompt: "Use IDA carefully.",
       enabled: "true",
       scope: "local",

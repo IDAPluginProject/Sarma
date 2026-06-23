@@ -65,6 +65,7 @@ export type AuditStateType = typeof AuditState.State;
 const BUILTIN_TOOL_NAMES = new Set([
   "rag_search",
   "web_search",
+  "fetch_url",
   "http_exchange",
   "packet_exchange",
 ]);

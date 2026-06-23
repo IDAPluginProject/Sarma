@@ -12,7 +12,7 @@ import type { ModelProviderDTO } from "@/engine/dto";
 import { buildAgentMiddlewareForModel } from "@/runtime/middleware";
 import { AgentRuntimeServices } from "@/runtime/services";
 import { buildHttpExchangeTool, buildPacketExchangeTool } from "@/resources/networkTools";
-import { buildWebSearchTool } from "@/resources/webTools";
+import { buildFetchUrlTool, buildWebSearchTool } from "@/resources/webTools";
 import { buildRagSearchTool } from "@/resources/rag";
 import { buildAuditGraph } from "@/workflows/auditGraph";
 import { AUDIT_SUBAGENTS } from "@/workflows/auditSubagents";
@@ -262,6 +262,7 @@ export class AgentFactory {
   private buildBuiltinTools(config: AgentRunConfig): StructuredToolInterface[] {
     const tools: StructuredToolInterface[] = [
       buildWebSearchTool(),
+      buildFetchUrlTool(),
       buildHttpExchangeTool(),
       buildPacketExchangeTool(),
     ];
